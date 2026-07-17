@@ -58,6 +58,8 @@ codex-monitor-agent hook-forward http://127.0.0.1:8765/api/v1/hooks/codex
 
 TTL 到期后自动恢复 App Server 或文件系统状态。可用 `--hook-running-ttl`、`--hook-idle-ttl` 和 `--hook-attention-ttl` 调整。
 
+当 `account/usage/read` 或 `account/rateLimits/read` 连续超时/失败时，代理会自动重启它自己启动的 Codex App Server。默认每个请求超时 10 秒、连续失败 2 次后恢复；可用 `--app-server-request-timeout` 和 `--app-server-failure-threshold` 调整。`/api/v1/status` 的 `codex.consecutive_failures` 与 `codex.last_recovery_at` 可用于观察恢复状态。
+
 > `print-hook-config` 只打印配置，不修改用户的 Codex 文件。Hook 必须经过 Codex 的 `/hooks` 信任流程才会运行。
 
 ## 构建与测试

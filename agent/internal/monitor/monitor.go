@@ -19,19 +19,21 @@ import (
 )
 
 type Config struct {
-	AgentVersion           string
-	InstallationID         string
-	CodexBinary            string
-	CodexHome              string
-	Endpoint               string
-	PollInterval           time.Duration
-	FilesystemInterval     time.Duration
-	StaleAfter             time.Duration
-	FilesystemActiveWindow time.Duration
-	HookRunningTTL         time.Duration
-	HookIdleTTL            time.Duration
-	HookAttentionTTL       time.Duration
-	MaxThreads             int
+	AgentVersion              string
+	InstallationID            string
+	CodexBinary               string
+	CodexHome                 string
+	Endpoint                  string
+	PollInterval              time.Duration
+	AppServerRequestTimeout   time.Duration
+	AppServerFailureThreshold int
+	FilesystemInterval        time.Duration
+	StaleAfter                time.Duration
+	FilesystemActiveWindow    time.Duration
+	HookRunningTTL            time.Duration
+	HookIdleTTL               time.Duration
+	HookAttentionTTL          time.Duration
+	MaxThreads                int
 }
 
 type Monitor struct {
@@ -169,7 +171,16 @@ func (m *Monitor) runAppServer(ctx context.Context) {
 			poll = 10 * time.Second
 		}
 		ticker := time.NewTicker(poll)
-		m.refreshAppServer(ctx, client)
+		if err := m.refreshAppServer(ctx, client); err != nil {
+			ticker.Stop()
+			_ = client.Close()
+			m.setConnection("disconnected", err.Error())
+			if !waitContext(ctx, backoff) {
+				return
+			}
+			backoff = nextBackoff(backoff)
+			continue
+		}
 		connected := true
 		for connected {
 			select {
@@ -183,7 +194,12 @@ func (m *Monitor) runAppServer(ctx context.Context) {
 				m.setConnection("disconnected", err.Error())
 				connected = false
 			case <-ticker.C:
-				m.refreshAppServer(ctx, client)
+				if err := m.refreshAppServer(ctx, client); err != nil {
+					ticker.Stop()
+					_ = client.Close()
+					m.setConnection("disconnected", err.Error())
+					connected = false
+				}
 			}
 		}
 		if !waitContext(ctx, backoff) {
@@ -193,9 +209,7 @@ func (m *Monitor) runAppServer(ctx context.Context) {
 	}
 }
 
-func (m *Monitor) refreshAppServer(parent context.Context, client *appserver.Client) {
-	ctx, cancel := context.WithTimeout(parent, 8*time.Second)
-	defer cancel()
+func (m *Monitor) refreshAppServer(parent context.Context, client *appserver.Client) error {
 	var threadsResponse struct {
 		Data []struct {
 			ID         string          `json:"id"`
@@ -208,16 +222,20 @@ func (m *Monitor) refreshAppServer(parent context.Context, client *appserver.Cli
 			Status     json.RawMessage `json:"status"`
 		} `json:"data"`
 	}
-	if err := client.Request(ctx, "thread/list", map[string]any{
+	ctx, cancel := m.appServerRequestContext(parent)
+	err := client.Request(ctx, "thread/list", map[string]any{
 		"limit": m.cfg.MaxThreads, "sortKey": "updated_at", "sortDirection": "desc",
-	}, &threadsResponse); err != nil {
-		m.setConnection("disconnected", err.Error())
-		return
+	}, &threadsResponse)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("thread/list: %w", err)
 	}
 	var loadedResponse struct {
 		Data []string `json:"data"`
 	}
+	ctx, cancel = m.appServerRequestContext(parent)
 	_ = client.Request(ctx, "thread/loaded/list", map[string]any{"limit": m.cfg.MaxThreads}, &loadedResponse)
+	cancel()
 	loaded := map[string]bool{}
 	for _, id := range loadedResponse.Data {
 		loaded[id] = true
@@ -233,27 +251,83 @@ func (m *Monitor) refreshAppServer(parent context.Context, client *appserver.Cli
 		})
 	}
 	var usage map[string]any
-	if err := client.Request(ctx, "account/usage/read", nil, &usage); err != nil {
+	var failures []error
+	ctx, cancel = m.appServerRequestContext(parent)
+	err = client.Request(ctx, "account/usage/read", nil, &usage)
+	cancel()
+	if err != nil {
 		usage = map[string]any{"availability": "unavailable", "error": err.Error()}
+		failures = append(failures, fmt.Errorf("account/usage/read: %w", err))
 	} else {
 		usage["availability"] = "available"
 	}
 	var rateLimits map[string]any
-	if err := client.Request(ctx, "account/rateLimits/read", nil, &rateLimits); err != nil {
+	ctx, cancel = m.appServerRequestContext(parent)
+	err = client.Request(ctx, "account/rateLimits/read", nil, &rateLimits)
+	cancel()
+	if err != nil {
 		rateLimits = map[string]any{"availability": "unavailable", "error": err.Error()}
+		failures = append(failures, fmt.Errorf("account/rateLimits/read: %w", err))
 	} else {
 		rateLimits["availability"] = "available"
 	}
 	now := time.Now().UTC()
+	restart := m.recordAccountResult(now, failures)
 	m.mu.Lock()
 	m.appThreads = threads
 	m.usage = usage
 	m.rateLimits = rateLimits
-	m.snapshot.Codex.ConnectionState = "connected"
+	if len(failures) == 0 {
+		m.snapshot.Codex.ConnectionState = "connected"
+	}
 	m.snapshot.Codex.LastSuccessAt = &now
-	m.snapshot.Codex.LastError = ""
+	if len(failures) == 0 {
+		m.snapshot.Codex.LastError = ""
+	}
 	m.rebuildLocked(now)
 	m.mu.Unlock()
+	if restart {
+		return fmt.Errorf("account reads failed %d consecutive times: %v", m.appServerFailureCount(), failures)
+	}
+	return nil
+}
+
+func (m *Monitor) appServerRequestContext(parent context.Context) (context.Context, context.CancelFunc) {
+	timeout := m.cfg.AppServerRequestTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	return context.WithTimeout(parent, timeout)
+}
+
+func (m *Monitor) appServerFailureThreshold() int {
+	if m.cfg.AppServerFailureThreshold > 0 {
+		return m.cfg.AppServerFailureThreshold
+	}
+	return 2
+}
+
+func (m *Monitor) recordAccountResult(now time.Time, failures []error) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(failures) == 0 {
+		m.snapshot.Codex.ConsecutiveFailures = 0
+		return false
+	}
+	m.snapshot.Codex.ConsecutiveFailures++
+	m.snapshot.Codex.LastError = fmt.Sprint(failures)
+	if m.snapshot.Codex.ConsecutiveFailures < m.appServerFailureThreshold() {
+		return false
+	}
+	m.snapshot.Codex.LastRecoveryAt = &now
+	m.snapshot.Codex.ConnectionState = "recovering"
+	return true
+}
+
+func (m *Monitor) appServerFailureCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.snapshot.Codex.ConsecutiveFailures
 }
 
 func (m *Monitor) handleAppServerMessage(method string, params json.RawMessage, serverRequest bool) {
