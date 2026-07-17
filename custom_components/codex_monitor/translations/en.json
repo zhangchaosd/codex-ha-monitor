@@ -1,0 +1,94 @@
+{
+  "title": "Codex Monitor",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to a Codex Monitor Agent",
+        "description": "Enter the URL of the read-only agent running on the Codex computer.",
+        "data": {
+          "url": "Agent URL",
+          "name": "Display name (optional)"
+        },
+        "data_description": {
+          "url": "For example: http://192.168.1.20:8765",
+          "name": "Defaults to the computer hostname reported by the agent."
+        }
+      },
+      "reconfigure": {
+        "title": "Reconnect Codex Monitor",
+        "description": "Change the URL while keeping the existing device and entity IDs.",
+        "data": {
+          "url": "Agent URL"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the agent.",
+      "invalid_response": "The server did not return a supported Codex Monitor response.",
+      "invalid_url": "Enter a valid HTTP or HTTPS URL without a query or fragment.",
+      "unknown": "Unexpected error. Check the Home Assistant logs."
+    },
+    "abort": {
+      "already_configured": "This agent is already configured.",
+      "unique_id_mismatch": "The new URL belongs to a different agent installation.",
+      "reconfigure_successful": "The agent URL was updated."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Codex Monitor options",
+        "description": "Choose how often Home Assistant reads the local agent.",
+        "data": {
+          "scan_interval": "Polling interval (seconds)"
+        },
+        "data_description": {
+          "scan_interval": "Allowed range: 5–300 seconds."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "workload_state": {
+        "name": "Workload state",
+        "state": {
+          "running": "Running",
+          "waiting_approval": "Waiting for approval",
+          "waiting_input": "Waiting for input",
+          "idle": "Idle",
+          "error": "Error",
+          "unknown": "Unknown"
+        }
+      },
+      "current_task": { "name": "Current task" },
+      "active_threads": { "name": "Active tasks" },
+      "connection_state": {
+        "name": "Connection state",
+        "state": {
+          "connected": "Connected",
+          "connecting": "Connecting",
+          "disconnected": "Disconnected",
+          "error": "Error",
+          "unknown": "Unknown"
+        }
+      },
+      "known_threads": { "name": "Known tasks" },
+      "codex_version": { "name": "Codex version" },
+      "agent_version": { "name": "Agent version" },
+      "lifetime_tokens": { "name": "Lifetime tokens" },
+      "current_streak_days": { "name": "Current streak" },
+      "primary_rate_limit_used": { "name": "Rate limit used" },
+      "primary_rate_limit_reset": { "name": "Rate limit reset" },
+      "secondary_rate_limit_used": { "name": "Secondary rate limit used" },
+      "secondary_rate_limit_reset": { "name": "Secondary rate limit reset" },
+      "received_hook_events": { "name": "Received hook events" }
+    },
+    "binary_sensor": {
+      "connected": { "name": "Connected" },
+      "running": { "name": "Running" },
+      "attention_required": { "name": "Attention required" },
+      "stale": { "name": "Stale data" }
+    }
+  }
+}

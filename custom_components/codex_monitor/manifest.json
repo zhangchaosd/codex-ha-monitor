@@ -1,0 +1,13 @@
+{
+  "domain": "codex_monitor",
+  "name": "Codex Monitor",
+  "codeowners": ["@zhangchaosd"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/zhangchaosd/codex-ha-monitor",
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/zhangchaosd/codex-ha-monitor/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

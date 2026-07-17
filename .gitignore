@@ -1,0 +1,13 @@
+.DS_Store
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.py[cod]
+
+agent/bin/
+agent/dist/
+dist/
+
+.storage/
+home-assistant.log*

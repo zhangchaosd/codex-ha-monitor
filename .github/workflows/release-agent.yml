@@ -1,0 +1,126 @@
+name: Release Agent
+
+on:
+  push:
+    tags:
+      - "agent-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example agent-v0.2.0"
+        required: true
+        default: "agent-v0.2.0"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.mod
+      - name: Resolve and verify version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+          source_version="$(sed -n 's/^const version = "\([^"]*\)"/\1/p' agent/cmd/cma/main.go)"
+          expected_tag="agent-v${source_version}"
+          if [[ "${tag}" != "${expected_tag}" ]]; then
+            echo "Tag ${tag} does not match agent version ${source_version}" >&2
+            exit 1
+          fi
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "version=${source_version}" >> "${GITHUB_OUTPUT}"
+      - name: Build and package
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          package="codex-monitor-agent_${VERSION}_${GOOS}_${GOARCH}"
+          mkdir -p "agent/dist/${package}"
+          binary="codex-monitor-agent"
+          if [[ "${GOOS}" == "windows" ]]; then
+            binary="${binary}.exe"
+          fi
+          go -C agent build -trimpath -ldflags="-s -w" -o "dist/${package}/${binary}" ./cmd/cma
+          cp agent/README.md agent/LICENSE "agent/dist/${package}/"
+          if [[ "${GOOS}" == "windows" ]]; then
+            (cd agent/dist && zip -qr "${package}.zip" "${package}")
+          else
+            tar -C agent/dist -czf "agent/dist/${package}.tar.gz" "${package}"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            agent/dist/*.tar.gz
+            agent/dist/*.zip
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: agent-*
+          path: release-assets
+          merge-multiple: true
+      - name: Resolve release tag
+        id: release
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+      - name: Create checksums
+        run: sha256sum release-assets/* > release-assets/SHA256SUMS.txt
+      - name: Publish with GitHub CLI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
+        run: |
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" release-assets/* --clobber --repo "${GITHUB_REPOSITORY}"
+          else
+            gh release create "${TAG}" release-assets/* \
+              --repo "${GITHUB_REPOSITORY}" \
+              --target "${GITHUB_SHA}" \
+              --title "Codex Monitor Agent ${TAG#agent-v}" \
+              --generate-notes
+          fi

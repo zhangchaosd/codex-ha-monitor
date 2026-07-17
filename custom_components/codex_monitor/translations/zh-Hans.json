@@ -1,0 +1,94 @@
+{
+  "title": "Codex 监控",
+  "config": {
+    "step": {
+      "user": {
+        "title": "连接 Codex 监控代理",
+        "description": "请输入运行在 Codex 电脑上的只读代理地址。",
+        "data": {
+          "url": "代理地址",
+          "name": "显示名称（可选）"
+        },
+        "data_description": {
+          "url": "例如：http://192.168.1.20:8765",
+          "name": "留空时使用代理上报的电脑主机名。"
+        }
+      },
+      "reconfigure": {
+        "title": "重新连接 Codex 监控",
+        "description": "修改代理地址，同时保留现有设备和实体 ID。",
+        "data": {
+          "url": "代理地址"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "无法连接代理。",
+      "invalid_response": "服务器没有返回受支持的 Codex 监控数据。",
+      "invalid_url": "请输入不带查询参数和片段的有效 HTTP 或 HTTPS 地址。",
+      "unknown": "发生意外错误，请检查 Home Assistant 日志。"
+    },
+    "abort": {
+      "already_configured": "此代理已经配置。",
+      "unique_id_mismatch": "新地址属于另一套代理安装，不能用于重新配置。",
+      "reconfigure_successful": "代理地址已更新。"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Codex 监控选项",
+        "description": "设置 Home Assistant 读取本地代理的频率。",
+        "data": {
+          "scan_interval": "轮询间隔（秒）"
+        },
+        "data_description": {
+          "scan_interval": "可设置为 5–300 秒。"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "workload_state": {
+        "name": "工作状态",
+        "state": {
+          "running": "运行中",
+          "waiting_approval": "等待批准",
+          "waiting_input": "等待输入",
+          "idle": "空闲",
+          "error": "错误",
+          "unknown": "未知"
+        }
+      },
+      "current_task": { "name": "当前任务" },
+      "active_threads": { "name": "活动任务数" },
+      "connection_state": {
+        "name": "连接状态",
+        "state": {
+          "connected": "已连接",
+          "connecting": "正在连接",
+          "disconnected": "已断开",
+          "error": "错误",
+          "unknown": "未知"
+        }
+      },
+      "known_threads": { "name": "已知任务数" },
+      "codex_version": { "name": "Codex 版本" },
+      "agent_version": { "name": "代理版本" },
+      "lifetime_tokens": { "name": "累计令牌数" },
+      "current_streak_days": { "name": "连续使用天数" },
+      "primary_rate_limit_used": { "name": "限额已用" },
+      "primary_rate_limit_reset": { "name": "限额重置时间" },
+      "secondary_rate_limit_used": { "name": "次级限额已用" },
+      "secondary_rate_limit_reset": { "name": "次级限额重置时间" },
+      "received_hook_events": { "name": "已接收 Hook 事件" }
+    },
+    "binary_sensor": {
+      "connected": { "name": "连接" },
+      "running": { "name": "运行" },
+      "attention_required": { "name": "需要处理" },
+      "stale": { "name": "数据过期" }
+    }
+  }
+}
