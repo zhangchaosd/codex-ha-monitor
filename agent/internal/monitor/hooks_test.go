@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -39,6 +40,39 @@ func TestRecordHookOverlaysMatchingSession(t *testing.T) {
 	}
 	if snapshot.Hooks.ReceivedEvents != 1 || snapshot.Hooks.ActiveSessions != 1 {
 		t.Fatalf("unexpected hook summary: %+v", snapshot.Hooks)
+	}
+}
+
+func TestAccountFailuresTriggerRecoveryAtThreshold(t *testing.T) {
+	m := New(Config{CodexBinary: "codex-does-not-exist-for-test", AppServerFailureThreshold: 2})
+	now := time.Now().UTC()
+	if restart := m.recordAccountResult(now, []error{errors.New("usage timed out")}); restart {
+		t.Fatal("first failure should not restart App Server")
+	}
+	if got := m.Snapshot().Codex.ConsecutiveFailures; got != 1 {
+		t.Fatalf("consecutive failures = %d, want 1", got)
+	}
+	if restart := m.recordAccountResult(now.Add(time.Second), []error{errors.New("rate limits timed out")}); !restart {
+		t.Fatal("second failure should restart App Server")
+	}
+	snapshot := m.Snapshot()
+	if snapshot.Codex.ConnectionState != "recovering" {
+		t.Fatalf("connection state = %q, want recovering", snapshot.Codex.ConnectionState)
+	}
+	if snapshot.Codex.LastRecoveryAt == nil {
+		t.Fatal("expected recovery timestamp")
+	}
+}
+
+func TestAccountSuccessResetsFailureCount(t *testing.T) {
+	m := New(Config{CodexBinary: "codex-does-not-exist-for-test"})
+	now := time.Now().UTC()
+	_ = m.recordAccountResult(now, []error{errors.New("usage timed out")})
+	if restart := m.recordAccountResult(now.Add(time.Second), nil); restart {
+		t.Fatal("success should not restart App Server")
+	}
+	if got := m.Snapshot().Codex.ConsecutiveFailures; got != 0 {
+		t.Fatalf("consecutive failures = %d, want 0", got)
 	}
 }
 

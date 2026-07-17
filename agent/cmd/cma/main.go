@@ -17,7 +17,7 @@ import (
 	"codex-monitor-agent/internal/monitor"
 )
 
-const version = "0.2.0"
+const version = "0.2.1"
 
 func main() {
 	if runHookCommand(os.Args[1:]) {
@@ -30,6 +30,8 @@ func main() {
 		codexBinary      = flag.String("codex-bin", "codex", "Codex executable")
 		codexHome        = flag.String("codex-home", "", "CODEX_HOME override")
 		pollInterval     = flag.Duration("poll-interval", 10*time.Second, "App Server reconcile interval")
+		requestTimeout   = flag.Duration("app-server-request-timeout", 10*time.Second, "Timeout for each App Server request")
+		failureThreshold = flag.Int("app-server-failure-threshold", 2, "Consecutive account read failures before restarting App Server")
 		staleAfter       = flag.Duration("stale-after", 30*time.Second, "Snapshot stale threshold")
 		activeWindow     = flag.Duration("filesystem-active-window", 60*time.Second, "Filesystem activity window")
 		hookRunningTTL   = flag.Duration("hook-running-ttl", 10*time.Minute, "How long a working hook remains authoritative")
@@ -53,6 +55,12 @@ func main() {
 	if *port < 1 || *port > 65535 {
 		log.Fatalf("port must be between 1 and 65535")
 	}
+	if *requestTimeout <= 0 {
+		log.Fatal("app-server-request-timeout must be greater than zero")
+	}
+	if *failureThreshold < 1 {
+		log.Fatal("app-server-failure-threshold must be at least one")
+	}
 	installationID, err := identity.LoadOrCreate()
 	if err != nil {
 		log.Fatalf("load installation id: %v", err)
@@ -63,6 +71,7 @@ func main() {
 		AgentVersion: version, InstallationID: installationID,
 		CodexBinary: *codexBinary, CodexHome: *codexHome, Endpoint: *endpoint,
 		PollInterval: *pollInterval, FilesystemInterval: 2 * time.Second,
+		AppServerRequestTimeout: *requestTimeout, AppServerFailureThreshold: *failureThreshold,
 		StaleAfter: *staleAfter, FilesystemActiveWindow: *activeWindow, MaxThreads: *maxThreads,
 		HookRunningTTL: *hookRunningTTL, HookIdleTTL: *hookIdleTTL, HookAttentionTTL: *hookAttentionTTL,
 	})

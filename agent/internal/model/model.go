@@ -79,10 +79,12 @@ type HookInfo struct {
 }
 
 type CodexInfo struct {
-	ConnectionState string     `json:"connection_state"`
-	Visibility      string     `json:"visibility"`
-	LastSuccessAt   *time.Time `json:"last_success_at"`
-	LastError       string     `json:"last_error,omitempty"`
+	ConnectionState     string     `json:"connection_state"`
+	Visibility          string     `json:"visibility"`
+	LastSuccessAt       *time.Time `json:"last_success_at"`
+	LastError           string     `json:"last_error,omitempty"`
+	ConsecutiveFailures int        `json:"consecutive_failures"`
+	LastRecoveryAt      *time.Time `json:"last_recovery_at,omitempty"`
 }
 
 type Snapshot struct {
