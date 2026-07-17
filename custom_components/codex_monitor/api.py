@@ -26,9 +26,10 @@ class CodexMonitorInvalidResponse(CodexMonitorApiError):
 class CodexMonitorApi:
     """Small aiohttp client using Home Assistant's shared session."""
 
-    def __init__(self, session: ClientSession, base_url: str) -> None:
+    def __init__(self, session: ClientSession, base_url: str, token: str) -> None:
         self._session = session
         self._base_url = base_url.rstrip("/")
+        self._headers = {"Authorization": f"Bearer {token}"}
         self._timeout = ClientTimeout(total=10)
 
     @property
@@ -77,6 +78,7 @@ class CodexMonitorApi:
         try:
             async with self._session.get(
                 f"{self._base_url}{path}",
+                headers=self._headers,
                 timeout=self._timeout,
             ) as response:
                 response.raise_for_status()

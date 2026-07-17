@@ -20,6 +20,7 @@ from .api import (
 from .const import (
     CONF_NAME,
     CONF_SCAN_INTERVAL,
+    CONF_TOKEN,
     CONF_URL,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_URL,
@@ -35,8 +36,9 @@ _LOGGER = logging.getLogger(__name__)
 async def _async_probe(
     hass,
     url: str,
+    token: str,
 ) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
-    api = CodexMonitorApi(async_get_clientsession(hass), url)
+    api = CodexMonitorApi(async_get_clientsession(hass), url, token)
     return await api.async_probe()
 
 
@@ -54,7 +56,10 @@ class CodexMonitorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             try:
                 url = normalize_url(user_input[CONF_URL])
-                version, status = await _async_probe(self.hass, url)
+                token = str(user_input[CONF_TOKEN]).strip()
+                if not token:
+                    raise ValueError("token is empty")
+                version, status = await _async_probe(self.hass, url, token)
             except ValueError:
                 errors["base"] = "invalid_url"
             except CodexMonitorCannotConnect:
@@ -75,7 +80,7 @@ class CodexMonitorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if not isinstance(host_name, str):
                     host_name = None
                 title = requested_name or host_name or f"Codex Monitor {installation_id[:8]}"
-                data = {CONF_URL: url}
+                data = {CONF_URL: url, CONF_TOKEN: token}
                 if requested_name:
                     data[CONF_NAME] = requested_name
                 return self.async_create_entry(title=title, data=data)
@@ -86,6 +91,7 @@ class CodexMonitorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_URL,
                     default=(user_input or {}).get(CONF_URL, DEFAULT_URL),
                 ): str,
+                vol.Required(CONF_TOKEN): str,
                 vol.Optional(
                     CONF_NAME,
                     default=(user_input or {}).get(CONF_NAME, ""),
@@ -108,7 +114,10 @@ class CodexMonitorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             try:
                 url = normalize_url(user_input[CONF_URL])
-                version, _ = await _async_probe(self.hass, url)
+                token = str(user_input[CONF_TOKEN]).strip()
+                if not token:
+                    raise ValueError("token is empty")
+                version, _ = await _async_probe(self.hass, url, token)
             except ValueError:
                 errors["base"] = "invalid_url"
             except CodexMonitorCannotConnect:
@@ -123,7 +132,7 @@ class CodexMonitorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._abort_if_unique_id_mismatch()
                 return self.async_update_reload_and_abort(
                     entry,
-                    data_updates={CONF_URL: url},
+                    data_updates={CONF_URL: url, CONF_TOKEN: token},
                 )
 
         return self.async_show_form(
@@ -133,7 +142,11 @@ class CodexMonitorConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Required(
                         CONF_URL,
                         default=(user_input or {}).get(CONF_URL, entry.data[CONF_URL]),
-                    ): str
+                    ): str,
+                    vol.Required(
+                        CONF_TOKEN,
+                        default=(user_input or {}).get(CONF_TOKEN, entry.data.get(CONF_TOKEN, "")),
+                    ): str,
                 }
             ),
             errors=errors,

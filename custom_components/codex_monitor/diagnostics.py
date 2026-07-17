@@ -7,6 +7,8 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
+from .const import CONF_TOKEN
+
 
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant,
@@ -14,11 +16,14 @@ async def async_get_config_entry_diagnostics(
 ) -> dict[str, Any]:
     """Return raw read-only agent data for troubleshooting."""
     snapshot = entry.runtime_data.coordinator.data
+    config_data = dict(entry.data)
+    if CONF_TOKEN in config_data:
+        config_data[CONF_TOKEN] = "**REDACTED**"
     return {
         "config_entry": {
             "title": entry.title,
             "unique_id": entry.unique_id,
-            "data": dict(entry.data),
+            "data": config_data,
             "options": dict(entry.options),
         },
         "status": dict(snapshot.status),

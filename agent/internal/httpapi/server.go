@@ -2,10 +2,12 @@ package httpapi
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"codex-monitor-agent/internal/model"
@@ -15,11 +17,12 @@ import (
 type Server struct {
 	address string
 	monitor *monitor.Monitor
+	token   string
 	http    *http.Server
 }
 
-func New(address string, m *monitor.Monitor) *Server {
-	s := &Server{address: address, monitor: m}
+func New(address string, m *monitor.Monitor, token string) *Server {
+	s := &Server{address: address, monitor: m, token: token}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleRoot)
 	mux.HandleFunc("/healthz", s.handleHealth)
@@ -31,7 +34,7 @@ func New(address string, m *monitor.Monitor) *Server {
 	mux.HandleFunc("/api/v1/rate-limits", s.handleRateLimits)
 	mux.HandleFunc("/api/v1/events", s.handleEvents)
 	mux.HandleFunc("/api/v1/hooks/codex", s.handleCodexHook)
-	s.http = &http.Server{Addr: address, Handler: cors(mux), ReadHeaderTimeout: 5 * time.Second}
+	s.http = &http.Server{Addr: address, Handler: cors(authenticate(token, mux)), ReadHeaderTimeout: 5 * time.Second}
 	return s
 }
 
@@ -186,7 +189,7 @@ func cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "*")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -203,6 +206,22 @@ func cors(next http.Handler) http.Handler {
 	})
 }
 
+func authenticate(token string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		provided := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if provided == r.Header.Get("Authorization") || subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="codex-monitor-agent"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 const statusPage = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Codex Monitor Agent</title><style>
@@ -210,8 +229,9 @@ body{font-family:system-ui,sans-serif;margin:2rem;background:#f5f7fb;color:#1720
 .card{background:white;border-radius:14px;padding:1rem 1.25rem;margin:.8rem 0;box-shadow:0 3px 16px #17203312}
 .state{font-size:2rem;font-weight:700}pre{white-space:pre-wrap;word-break:break-word}table{width:100%;border-collapse:collapse}td,th{padding:.5rem;border-bottom:1px solid #dde3ee;text-align:left}
 </style></head><body><main><h1>Codex Monitor Agent</h1><div class="card"><div id="state" class="state">Loading…</div><div id="meta"></div></div><div class="card"><h2>最近线程</h2><table><thead><tr><th>名称</th><th>状态</th><th>来源</th><th>更新时间</th></tr></thead><tbody id="threads"></tbody></table></div><div class="card"><h2>原始状态</h2><pre id="raw"></pre></div></main><script>
-async function refresh(){const [s,t]=await Promise.all([fetch('/api/v1/status').then(r=>r.json()),fetch('/api/v1/threads?limit=10').then(r=>r.json())]);
+const token=sessionStorage.getItem('cmaToken')||prompt('Codex Monitor API token');if(token)sessionStorage.setItem('cmaToken',token);const api=p=>fetch(p,{headers:{Authorization:'Bearer '+token}}).then(r=>{if(!r.ok)throw new Error('Request failed: '+r.status);return r.json()});
+async function refresh(){const [s,t]=await Promise.all([api('/api/v1/status'),api('/api/v1/threads?limit=10')]);
 document.querySelector('#state').textContent=s.summary.workload_state;document.querySelector('#meta').textContent=s.host.name+' · '+s.codex.connection_state+' · '+s.codex.visibility+' · hooks '+s.hooks.active_sessions+' · Codex '+(s.codex_cli.version||'unknown');document.querySelector('#raw').textContent=JSON.stringify(s,null,2);
 document.querySelector('#threads').innerHTML=(t.threads||[]).map(x=>'<tr><td>'+escapeHTML(x.name||x.id)+'</td><td>'+x.state+'</td><td>'+escapeHTML(x.source||'')+'</td><td>'+x.updated_at+'</td></tr>').join('')}
-function escapeHTML(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}refresh();setInterval(refresh,5000);const es=new EventSource('/api/v1/events');es.addEventListener('snapshot',refresh);
+function escapeHTML(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}if(token){refresh();setInterval(refresh,5000)}
 </script></body></html>`

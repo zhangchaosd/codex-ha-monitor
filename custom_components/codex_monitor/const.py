@@ -5,6 +5,7 @@ DOMAIN = "codex_monitor"
 PLATFORMS = ("sensor", "binary_sensor")
 
 CONF_URL = "url"
+CONF_TOKEN = "token"
 CONF_NAME = "name"
 CONF_SCAN_INTERVAL = "scan_interval"
 
