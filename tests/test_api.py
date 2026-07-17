@@ -29,7 +29,8 @@ class FakeSession:
     def __init__(self, responses):
         self.responses = responses
 
-    def get(self, url, timeout):
+    def get(self, url, *, headers, timeout):
+        assert headers == {"Authorization": "Bearer secret"}
         for suffix, response in self.responses.items():
             if url.endswith(suffix):
                 return FakeResponse(response)
@@ -44,7 +45,7 @@ async def test_probe_checks_installation_identity():
             "/api/v1/status": {"installation_id": "same"},
         }
     )
-    api = CodexMonitorApi(session, "http://agent:8765/")
+    api = CodexMonitorApi(session, "http://agent:8765/", "secret")
 
     version, status = await api.async_probe()
 
@@ -60,7 +61,7 @@ async def test_probe_rejects_changed_installation_identity():
             "/api/v1/status": {"installation_id": "two"},
         }
     )
-    api = CodexMonitorApi(session, "http://agent:8765")
+    api = CodexMonitorApi(session, "http://agent:8765", "secret")
 
     with pytest.raises(CodexMonitorInvalidResponse):
         await api.async_probe()

@@ -1,6 +1,6 @@
 # Codex Monitor Agent
 
-一个无认证的局域网只读 Codex 状态代理。当前 MVP 使用 Go 标准库实现，支持：
+一个使用 Bearer Token 认证的局域网只读 Codex 状态代理。当前 MVP 使用 Go 标准库实现，支持：
 
 - 自动启动 stdio Codex App Server，并读取线程、Token 和额度。
 - 接收 Codex 原生生命周期 Hooks，按 `session_id` / `turn_id` 提供低延迟任务和审批状态。
@@ -15,26 +15,30 @@
 ## 开发运行
 
 ```bash
-go run ./cmd/cma 8765
+go run ./cmd/cma --token 'replace-with-a-long-random-token' 8765
 ```
 
 然后访问：
 
 ```text
-http://127.0.0.1:8765/
-http://127.0.0.1:8765/api/v1/version
-http://127.0.0.1:8765/api/v1/status
-http://127.0.0.1:8765/api/v1/threads
+http://[::1]:8765/
+http://[::1]:8765/api/v1/version
+http://[::1]:8765/api/v1/status
+http://[::1]:8765/api/v1/threads
 ```
 
-默认监听 `0.0.0.0`，不需要认证。
+默认监听 IPv6 通配地址 `[::]:8765`。所有 API 请求必须带 `Authorization: Bearer <token>`，例如：
+
+```bash
+curl -H 'Authorization: Bearer replace-with-a-long-random-token' http://[::1]:8765/api/v1/usage
+```
 
 ## 启用 Codex Hooks
 
 构建代理后生成推荐配置：
 
 ```bash
-./bin/codex-monitor-agent print-hook-config
+./bin/codex-monitor-agent print-hook-config --token 'replace-with-a-long-random-token'
 ```
 
 将输出的 `hooks` 对象合并到现有 `~/.codex/hooks.json`，不要覆盖已有 Hooks。然后在 Codex CLI 中运行 `/hooks`，检查并信任新命令。
@@ -42,7 +46,7 @@ http://127.0.0.1:8765/api/v1/threads
 配置里的每个 command hook 会执行：
 
 ```text
-codex-monitor-agent hook-forward http://127.0.0.1:8765/api/v1/hooks/codex
+codex-monitor-agent hook-forward --token 'replace-with-a-long-random-token' http://127.0.0.1:8765/api/v1/hooks/codex
 ```
 
 `hook-forward` 将 Codex 写到 stdin 的 JSON 原样转发，因此代理能够保留 `session_id`、`turn_id`、`cwd` 和工具名称。转发采用短超时和 best-effort 语义；代理暂时不可用时不会阻塞 Codex。

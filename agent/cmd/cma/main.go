@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"strconv"
@@ -17,7 +18,7 @@ import (
 	"codex-monitor-agent/internal/monitor"
 )
 
-const version = "0.2.1"
+const version = "0.3.0"
 
 func main() {
 	if runHookCommand(os.Args[1:]) {
@@ -25,7 +26,8 @@ func main() {
 	}
 	var (
 		port             = flag.Int("port", 8765, "HTTP listen port")
-		bind             = flag.String("bind", "0.0.0.0", "HTTP bind address")
+		bind             = flag.String("bind", "::", "HTTP bind address")
+		token            = flag.String("token", "", "Required API bearer token")
 		endpoint         = flag.String("codex", "auto", "Codex endpoint: auto or stdio")
 		codexBinary      = flag.String("codex-bin", "codex", "Codex executable")
 		codexHome        = flag.String("codex-home", "", "CODEX_HOME override")
@@ -61,6 +63,9 @@ func main() {
 	if *failureThreshold < 1 {
 		log.Fatal("app-server-failure-threshold must be at least one")
 	}
+	if *token == "" {
+		log.Fatal("token is required")
+	}
 	installationID, err := identity.LoadOrCreate()
 	if err != nil {
 		log.Fatalf("load installation id: %v", err)
@@ -76,9 +81,9 @@ func main() {
 		HookRunningTTL: *hookRunningTTL, HookIdleTTL: *hookIdleTTL, HookAttentionTTL: *hookAttentionTTL,
 	})
 	go m.Run(ctx)
-	address := fmt.Sprintf("%s:%d", *bind, *port)
+	address := net.JoinHostPort(*bind, strconv.Itoa(*port))
 	log.Printf("CMA %s listening on http://%s", version, address)
-	if err := httpapi.New(address, m).ListenAndServe(ctx); err != nil {
+	if err := httpapi.New(address, m, *token).ListenAndServe(ctx); err != nil {
 		log.Fatalf("HTTP server: %v", err)
 	}
 }
@@ -87,24 +92,42 @@ func runHookCommand(args []string) bool {
 	if len(args) == 0 {
 		return false
 	}
-	endpoint := hookrelay.DefaultURL
-	if len(args) >= 2 {
-		endpoint = args[1]
-	}
 	switch args[0] {
 	case "hook-forward":
+		token, endpoint, ok := hookArgs(args[1:])
+		if !ok {
+			log.Printf("hook-forward requires --token <token> [endpoint]")
+			return true
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		// Hooks must never hold up Codex. Forwarding is deliberately best effort
 		// and emits no stdout, which is a valid successful hook response.
-		_ = hookrelay.Forward(ctx, os.Stdin, endpoint)
+		_ = hookrelay.Forward(ctx, os.Stdin, endpoint, token)
 		return true
 	case "print-hook-config":
-		if err := hookrelay.PrintConfig(os.Stdout, hookrelay.Executable(), endpoint); err != nil {
+		token, endpoint, ok := hookArgs(args[1:])
+		if !ok {
+			log.Printf("print-hook-config requires --token <token> [endpoint]")
+			return true
+		}
+		if err := hookrelay.PrintConfig(os.Stdout, hookrelay.Executable(), endpoint, token); err != nil {
 			log.Printf("print hook config: %v", err)
 		}
 		return true
 	default:
 		return false
 	}
+}
+
+func hookArgs(args []string) (token, endpoint string, ok bool) {
+	endpoint = hookrelay.DefaultURL
+	if len(args) < 2 || args[0] != "--token" || args[1] == "" {
+		return "", "", false
+	}
+	token = args[1]
+	if len(args) > 2 {
+		endpoint = args[2]
+	}
+	return token, endpoint, true
 }

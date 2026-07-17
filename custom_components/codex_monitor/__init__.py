@@ -11,6 +11,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .api import CodexMonitorApi
 from .const import (
     CONF_SCAN_INTERVAL,
+    CONF_TOKEN,
     CONF_URL,
     DEFAULT_SCAN_INTERVAL,
     PLATFORMS,
@@ -31,6 +32,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     api = CodexMonitorApi(
         async_get_clientsession(hass),
         entry.data[CONF_URL],
+        entry.data.get(CONF_TOKEN, ""),
     )
     coordinator = CodexMonitorCoordinator(
         hass,

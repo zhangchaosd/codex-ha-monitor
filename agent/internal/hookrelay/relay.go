@@ -18,12 +18,13 @@ var events = []string{
 	"PostToolUse", "PreCompact", "PostCompact", "SubagentStart", "SubagentStop", "Stop",
 }
 
-func Forward(ctx context.Context, reader io.Reader, endpoint string) error {
+func Forward(ctx context.Context, reader io.Reader, endpoint, token string) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, io.LimitReader(reader, 1024*1024))
 	if err != nil {
 		return err
 	}
 	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+token)
 	client := &http.Client{Timeout: 1500 * time.Millisecond}
 	response, err := client.Do(request)
 	if err != nil {
@@ -37,9 +38,9 @@ func Forward(ctx context.Context, reader io.Reader, endpoint string) error {
 	return nil
 }
 
-func Config(executable, endpoint string) map[string]any {
-	unixCommand := shellQuote(executable) + " hook-forward " + shellQuote(endpoint)
-	windowsCommand := windowsQuote(executable) + " hook-forward " + windowsQuote(endpoint)
+func Config(executable, endpoint, token string) map[string]any {
+	unixCommand := shellQuote(executable) + " hook-forward --token " + shellQuote(token) + " " + shellQuote(endpoint)
+	windowsCommand := windowsQuote(executable) + " hook-forward --token " + windowsQuote(token) + " " + windowsQuote(endpoint)
 	hooks := make(map[string]any, len(events))
 	for _, event := range events {
 		hooks[event] = []any{map[string]any{
@@ -52,10 +53,10 @@ func Config(executable, endpoint string) map[string]any {
 	return map[string]any{"hooks": hooks}
 }
 
-func PrintConfig(writer io.Writer, executable, endpoint string) error {
+func PrintConfig(writer io.Writer, executable, endpoint, token string) error {
 	encoder := json.NewEncoder(writer)
 	encoder.SetIndent("", "  ")
-	return encoder.Encode(Config(executable, endpoint))
+	return encoder.Encode(Config(executable, endpoint, token))
 }
 
 func Executable() string {
