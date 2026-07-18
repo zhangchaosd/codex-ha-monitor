@@ -76,6 +76,35 @@ func TestAccountSuccessResetsFailureCount(t *testing.T) {
 	}
 }
 
+func TestTrimUsageHistoryRetainsNewestBuckets(t *testing.T) {
+	usage := map[string]any{
+		"summary": map[string]any{"lifetimeTokens": 123},
+		"dailyUsageBuckets": []any{
+			map[string]any{"startDate": "2026-07-01"},
+			map[string]any{"startDate": "2026-07-02"},
+			map[string]any{"startDate": "2026-07-03"},
+		},
+	}
+	trimmed := trimUsageHistory(usage, 2)
+	buckets := trimmed["dailyUsageBuckets"].([]any)
+	if len(buckets) != 2 {
+		t.Fatalf("bucket count = %d, want 2", len(buckets))
+	}
+	if got := buckets[0].(map[string]any)["startDate"]; got != "2026-07-02" {
+		t.Fatalf("first retained bucket = %v, want 2026-07-02", got)
+	}
+	if usage["dailyUsageBuckets"].([]any)[0].(map[string]any)["startDate"] != "2026-07-01" {
+		t.Fatal("trim mutated the original usage payload")
+	}
+}
+
+func TestTrimUsageHistoryCanDisableBuckets(t *testing.T) {
+	trimmed := trimUsageHistory(map[string]any{"dailyUsageBuckets": []any{map[string]any{"startDate": "2026-07-01"}}}, 0)
+	if len(trimmed["dailyUsageBuckets"].([]any)) != 0 {
+		t.Fatal("days=0 should remove all daily buckets")
+	}
+}
+
 func TestRecordHookStateMapping(t *testing.T) {
 	tests := []struct {
 		event string

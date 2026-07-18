@@ -27,6 +27,7 @@ type Config struct {
 	PollInterval              time.Duration
 	AppServerRequestTimeout   time.Duration
 	AppServerFailureThreshold int
+	UsageHistoryDays          int
 	FilesystemInterval        time.Duration
 	StaleAfter                time.Duration
 	FilesystemActiveWindow    time.Duration
@@ -275,7 +276,7 @@ func (m *Monitor) refreshAppServer(parent context.Context, client *appserver.Cli
 	restart := m.recordAccountResult(now, failures)
 	m.mu.Lock()
 	m.appThreads = threads
-	m.usage = usage
+	m.usage = trimUsageHistory(usage, m.usageHistoryDays())
 	m.rateLimits = rateLimits
 	if len(failures) == 0 {
 		m.snapshot.Codex.ConnectionState = "connected"
@@ -290,6 +291,52 @@ func (m *Monitor) refreshAppServer(parent context.Context, client *appserver.Cli
 		return fmt.Errorf("account reads failed %d consecutive times: %v", m.appServerFailureCount(), failures)
 	}
 	return nil
+}
+
+// Usage returns a bounded copy of the latest account usage payload. A caller
+// can further shorten the retained daily history, but can never exceed the
+// agent-wide retention limit.
+func (m *Monitor) Usage(days int) map[string]any {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.usage == nil {
+		return nil
+	}
+	limit := m.usageHistoryDays()
+	if days >= 0 && days < limit {
+		limit = days
+	}
+	return trimUsageHistory(m.usage, limit)
+}
+
+func (m *Monitor) usageHistoryDays() int {
+	if m.cfg.UsageHistoryDays >= 0 {
+		return m.cfg.UsageHistoryDays
+	}
+	return 90
+}
+
+func trimUsageHistory(usage map[string]any, days int) map[string]any {
+	if usage == nil {
+		return nil
+	}
+	trimmed := make(map[string]any, len(usage))
+	for key, value := range usage {
+		trimmed[key] = value
+	}
+	buckets, ok := usage["dailyUsageBuckets"].([]any)
+	if !ok {
+		return trimmed
+	}
+	if days <= 0 {
+		trimmed["dailyUsageBuckets"] = []any{}
+		return trimmed
+	}
+	if len(buckets) > days {
+		buckets = buckets[len(buckets)-days:]
+	}
+	trimmed["dailyUsageBuckets"] = append([]any(nil), buckets...)
+	return trimmed
 }
 
 func (m *Monitor) appServerRequestContext(parent context.Context) (context.Context, context.CancelFunc) {

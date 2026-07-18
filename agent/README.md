@@ -64,6 +64,8 @@ TTL 到期后自动恢复 App Server 或文件系统状态。可用 `--hook-runn
 
 当 `account/usage/read` 或 `account/rateLimits/read` 连续超时/失败时，代理会自动重启它自己启动的 Codex App Server。默认每个请求超时 10 秒、连续失败 2 次后恢复；可用 `--app-server-request-timeout` 和 `--app-server-failure-threshold` 调整。`/api/v1/status` 的 `codex.consecutive_failures` 与 `codex.last_recovery_at` 可用于观察恢复状态。
 
+为避免账户历史增长导致响应无限变大，代理默认只保留最近 90 个 `dailyUsageBuckets`。用 `--usage-history-days 0..365` 调整（`0` 不返回每日桶）；`GET /api/v1/usage?days=N` 可在该上限内进一步缩短返回的每日桶。
+
 > `print-hook-config` 只打印配置，不修改用户的 Codex 文件。Hook 必须经过 Codex 的 `/hooks` 信任流程才会运行。
 
 ## 构建与测试

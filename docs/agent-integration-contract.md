@@ -47,7 +47,7 @@ curl -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/v1/status"
 1. Request `GET /api/v1/version` and `GET /api/v1/status` with the bearer token.
 2. Require the same non-empty `installation_id` in both replies before creating a device/client record.
 3. Poll `GET /api/v1/status` and `GET /api/v1/threads?limit=50` concurrently. A five-second interval is a reasonable default; do not poll faster than once per second.
-4. Request `/api/v1/usage` and `/api/v1/rate-limits` only when the client needs those values. Their payloads may legitimately contain `"availability": "unavailable"`.
+4. Request `/api/v1/usage?days=30` and `/api/v1/rate-limits` only when the client needs those values. Their payloads may legitimately contain `"availability": "unavailable"`.
 5. On network failure, 5xx, or invalid JSON, retain the last valid snapshot as stale and retry with bounded backoff. Do not retry authentication failures until credentials change.
 
 ## Endpoints
@@ -59,7 +59,7 @@ curl -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/v1/status"
 | `GET` | `/api/v1/version` | Agent identity and software versions. |
 | `GET` | `/api/v1/status` | Current aggregate state; thread array omitted. |
 | `GET` | `/api/v1/threads?limit=1..200` | Recent thread summaries; default limit is 100. |
-| `GET` | `/api/v1/usage` | Account usage summary and daily buckets. |
+| `GET` | `/api/v1/usage?days=0..365` | Account usage summary and daily buckets, bounded by the agent retention setting. |
 | `GET` | `/api/v1/rate-limits` | Codex account rate-limit payload. |
 | `GET` | `/api/v1/events` | SSE stream of complete snapshots. |
 | `POST` | `/api/v1/hooks/codex` | Native Codex Hook relay receiver; not needed by normal readers. |
@@ -146,7 +146,9 @@ Thread selection priority for a single “current task” display is `WAITING_AP
 
 ### Usage and rate limits
 
-These endpoints preserve Codex App Server field names. A response can be valid but unavailable:
+These endpoints preserve Codex App Server field names. The agent retains only the newest 90 daily usage buckets by default; `--usage-history-days 0..365` changes that ceiling. `/api/v1/usage?days=N` may request fewer buckets, while `days=0` returns the summary without daily buckets. A client cannot request more history than the agent retained.
+
+A response can be valid but unavailable:
 
 ```json
 {"availability":"unavailable","error":"context deadline exceeded"}
@@ -169,5 +171,5 @@ The generated hook commands pass the bearer token to `POST /api/v1/hooks/codex`.
 ## AI implementation prompt
 
 ```text
-Build a read-only client for Codex Monitor Agent using docs/agent-integration-contract.md and docs/agent-openapi.yaml as the source of truth. Configure a base URL and bearer token. Send Authorization: Bearer <token> on every API request. On setup, verify that /api/v1/version and /api/v1/status return the same installation_id. Poll status and threads concurrently, preserve unknown fields, do not treat UNKNOWN as IDLE, and surface visibility/state_source/state_confidence. Treat usage or rate_limits availability=unavailable as unknown values. Do not implement task control, approval, user-input, or token-in-URL behavior.
+Build a read-only client for Codex Monitor Agent using docs/agent-integration-contract.md and docs/agent-openapi.yaml as the source of truth. Configure a base URL and bearer token. Send Authorization: Bearer <token> on every API request. On setup, verify that /api/v1/version and /api/v1/status return the same installation_id. Poll status and threads concurrently, preserve unknown fields, do not treat UNKNOWN as IDLE, and surface visibility/state_source/state_confidence. Request only the usage history needed with /api/v1/usage?days=N, and treat availability=unavailable as unknown values. Do not implement task control, approval, user-input, or token-in-URL behavior.
 ```

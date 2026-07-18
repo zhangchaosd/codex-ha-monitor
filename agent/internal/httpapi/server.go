@@ -114,13 +114,22 @@ func (s *Server) handleThreads(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleUsage(w http.ResponseWriter, _ *http.Request) {
-	snapshot := s.monitor.Snapshot()
-	if snapshot.Usage == nil {
+func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
+	days := -1
+	if value := r.URL.Query().Get("days"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 0 || parsed > 365 {
+			http.Error(w, "days must be an integer between 0 and 365", http.StatusBadRequest)
+			return
+		}
+		days = parsed
+	}
+	usage := s.monitor.Usage(days)
+	if usage == nil {
 		writeJSON(w, map[string]any{"availability": "unavailable", "summary": nil, "dailyUsageBuckets": nil})
 		return
 	}
-	writeJSON(w, snapshot.Usage)
+	writeJSON(w, usage)
 }
 
 func (s *Server) handleRateLimits(w http.ResponseWriter, _ *http.Request) {

@@ -18,7 +18,7 @@ import (
 	"codex-monitor-agent/internal/monitor"
 )
 
-const version = "0.3.0"
+const version = "0.3.1"
 
 func main() {
 	if runHookCommand(os.Args[1:]) {
@@ -34,6 +34,7 @@ func main() {
 		pollInterval     = flag.Duration("poll-interval", 10*time.Second, "App Server reconcile interval")
 		requestTimeout   = flag.Duration("app-server-request-timeout", 10*time.Second, "Timeout for each App Server request")
 		failureThreshold = flag.Int("app-server-failure-threshold", 2, "Consecutive account read failures before restarting App Server")
+		usageHistoryDays = flag.Int("usage-history-days", 90, "Maximum daily usage buckets retained (0 disables buckets)")
 		staleAfter       = flag.Duration("stale-after", 30*time.Second, "Snapshot stale threshold")
 		activeWindow     = flag.Duration("filesystem-active-window", 60*time.Second, "Filesystem activity window")
 		hookRunningTTL   = flag.Duration("hook-running-ttl", 10*time.Minute, "How long a working hook remains authoritative")
@@ -63,6 +64,9 @@ func main() {
 	if *failureThreshold < 1 {
 		log.Fatal("app-server-failure-threshold must be at least one")
 	}
+	if *usageHistoryDays < 0 || *usageHistoryDays > 365 {
+		log.Fatal("usage-history-days must be between 0 and 365")
+	}
 	if *token == "" {
 		log.Fatal("token is required")
 	}
@@ -77,7 +81,8 @@ func main() {
 		CodexBinary: *codexBinary, CodexHome: *codexHome, Endpoint: *endpoint,
 		PollInterval: *pollInterval, FilesystemInterval: 2 * time.Second,
 		AppServerRequestTimeout: *requestTimeout, AppServerFailureThreshold: *failureThreshold,
-		StaleAfter: *staleAfter, FilesystemActiveWindow: *activeWindow, MaxThreads: *maxThreads,
+		UsageHistoryDays: *usageHistoryDays,
+		StaleAfter:       *staleAfter, FilesystemActiveWindow: *activeWindow, MaxThreads: *maxThreads,
 		HookRunningTTL: *hookRunningTTL, HookIdleTTL: *hookIdleTTL, HookAttentionTTL: *hookAttentionTTL,
 	})
 	go m.Run(ctx)

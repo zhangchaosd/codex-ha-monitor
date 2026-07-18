@@ -68,3 +68,17 @@ func TestAPIRequiresBearerToken(t *testing.T) {
 		t.Fatalf("authorized status = %d, want %d", recorder.Code, http.StatusOK)
 	}
 }
+
+func TestUsageEndpointRejectsInvalidDays(t *testing.T) {
+	m := monitor.New(monitor.Config{CodexBinary: "codex-does-not-exist-for-test"})
+	server := New("127.0.0.1:0", m, "secret")
+	for _, days := range []string{"-1", "366", "invalid"} {
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/usage?days="+days, nil)
+		request.Header.Set("Authorization", "Bearer secret")
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("days %q returned %d, want %d", days, recorder.Code, http.StatusBadRequest)
+		}
+	}
+}
