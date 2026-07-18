@@ -1,0 +1,146 @@
+openapi: 3.1.0
+info:
+  title: Codex Monitor Agent API
+  version: 0.3.0
+  description: Read-only local-network API. All API endpoints require a bearer token.
+servers:
+  - url: http://[::1]:8765
+security:
+  - bearerAuth: []
+paths:
+  /healthz:
+    get:
+      summary: Process liveness
+      responses:
+        '200': {description: Agent is running}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /readyz:
+    get:
+      summary: Agent readiness
+      responses:
+        '200': {description: Readiness response}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /api/v1/version:
+    get:
+      summary: Agent and Codex versions
+      responses:
+        '200':
+          description: Version response
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Version'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /api/v1/status:
+    get:
+      summary: Current aggregate snapshot without threads
+      responses:
+        '200':
+          description: Status snapshot
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Snapshot'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /api/v1/threads:
+    get:
+      summary: Recent thread summaries
+      parameters:
+        - in: query
+          name: limit
+          schema: {type: integer, minimum: 1, maximum: 200, default: 100}
+      responses:
+        '200':
+          description: Thread response
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [schema_version, generated_at, threads]
+                properties:
+                  schema_version: {type: string}
+                  generated_at: {type: string, format: date-time}
+                  threads: {type: array, items: {$ref: '#/components/schemas/Thread'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /api/v1/usage:
+    get:
+      summary: Codex usage data
+      responses:
+        '200': {description: Usage payload from Codex App Server, with availability field}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /api/v1/rate-limits:
+    get:
+      summary: Codex rate-limit data
+      responses:
+        '200': {description: Rate-limit payload from Codex App Server, with availability field}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /api/v1/events:
+    get:
+      summary: Snapshot Server-Sent Events stream
+      responses:
+        '200': {description: text/event-stream with event name snapshot}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /api/v1/hooks/codex:
+    post:
+      summary: Receive a native Codex Hook event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/HookEvent'}
+      responses:
+        '200': {description: Hook result}
+        '400': {description: Invalid Hook JSON or required identity missing}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  responses:
+    Unauthorized:
+      description: Missing or invalid Authorization bearer token
+  schemas:
+    Version:
+      type: object
+      required: [schema_version, installation_id, agent, codex_cli, app_server]
+      properties:
+        schema_version: {type: string, example: '1.0'}
+        installation_id: {type: string}
+        agent: {type: object, additionalProperties: true}
+        codex_cli: {type: object, additionalProperties: true}
+        app_server: {type: object, additionalProperties: true}
+    Snapshot:
+      type: object
+      required: [schema_version, generated_at, stale, installation_id, codex, summary]
+      properties:
+        schema_version: {type: string}
+        generated_at: {type: string, format: date-time}
+        stale: {type: boolean}
+        installation_id: {type: string}
+        codex: {type: object, additionalProperties: true}
+        summary: {type: object, additionalProperties: true}
+        usage: {type: object, additionalProperties: true}
+        rate_limits: {type: object, additionalProperties: true}
+    Thread:
+      type: object
+      required: [id, state, state_source, state_confidence, loaded, updated_at]
+      properties:
+        id: {type: string}
+        turn_id: {type: string}
+        name: {type: string}
+        preview: {type: string}
+        cwd: {type: string}
+        source: {type: string}
+        state: {type: string}
+        state_source: {type: string}
+        state_confidence: {type: string}
+        loaded: {type: boolean}
+        updated_at: {type: string, format: date-time}
+    HookEvent:
+      type: object
+      required: [session_id, hook_event_name]
+      properties:
+        session_id: {type: string}
+        turn_id: {type: string}
+        cwd: {type: string}
+        hook_event_name: {type: string}
+        tool_name: {type: string}

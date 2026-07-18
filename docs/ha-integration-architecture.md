@@ -1,5 +1,7 @@
 # Home Assistant 集成设计
 
+> 历史架构说明：当前 HA 集成已要求用户填写 Agent URL 和 API Token，并在每个请求中发送 Bearer Token。接口行为请以 [agent-integration-contract.md](agent-integration-contract.md) 和 [agent-openapi.yaml](agent-openapi.yaml) 为准。
+
 ## 目标与边界
 
 `codex_monitor` 是 Codex Monitor Agent 的只读 Home Assistant 客户端。第一版负责发现不了、但能由用户显式配置的局域网 HTTP 代理，并把稳定、可自动化的状态映射为 HA 设备和实体。

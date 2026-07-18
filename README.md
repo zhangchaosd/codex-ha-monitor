@@ -14,7 +14,7 @@ This repository contains two components:
 - `agent/`: a read-only Go monitoring agent that runs on the Codex computer.
 - `custom_components/codex_monitor/`: a Home Assistant custom integration.
 
-The current release is read-only and does not provide approval or control operations. Authentication is intentionally out of scope: any device that can reach the agent URL can read the exposed information.
+The current release is read-only and does not provide approval or control operations. The agent requires a bearer token for every API request.
 
 ### Features
 
@@ -42,7 +42,7 @@ Download the archive for your platform from [Releases](https://github.com/zhangc
 
 ```bash
 chmod +x codex-monitor-agent
-./codex-monitor-agent --bind 0.0.0.0 --port 8765
+./codex-monitor-agent --token 'replace-with-a-long-random-token'
 ```
 
 Or build it from source:
@@ -50,22 +50,21 @@ Or build it from source:
 ```bash
 cd agent
 go build -o ./bin/codex-monitor-agent ./cmd/cma
-./bin/codex-monitor-agent --bind 0.0.0.0 --port 8765
+./bin/codex-monitor-agent --token 'replace-with-a-long-random-token'
 ```
 
 Verify the service:
 
 ```bash
-curl http://127.0.0.1:8765/healthz
-curl http://127.0.0.1:8765/api/v1/version
-curl http://127.0.0.1:8765/api/v1/status
+curl -H 'Authorization: Bearer replace-with-a-long-random-token' http://[::1]:8765/healthz
+curl -H 'Authorization: Bearer replace-with-a-long-random-token' http://[::1]:8765/api/v1/status
 ```
 
-The agent listens on `0.0.0.0:8765` by default. See [`agent/README.md`](agent/README.md) for Hook setup, data-source precedence, and command-line options.
+The agent listens on `[::]:8765` by default. See [`agent/README.md`](agent/README.md) for Hook setup and command-line options, and see the [AI/client integration contract](docs/agent-integration-contract.md) plus [OpenAPI description](docs/agent-openapi.yaml) when building another client.
 
 ### Agent API and protocols
 
-The agent exposes a versioned HTTP API. It requires no authentication and allows cross-origin requests from any origin. Normal API responses use UTF-8 JSON; timestamps use RFC 3339; workload states use uppercase values such as `RUNNING`, `WAITING_APPROVAL`, `WAITING_INPUT`, `IDLE`, `ERROR`, and `UNKNOWN`.
+The agent exposes a versioned HTTP API. Every data endpoint requires `Authorization: Bearer <token>`. Normal API responses use UTF-8 JSON; timestamps use RFC 3339; workload states use uppercase values such as `RUNNING`, `WAITING_APPROVAL`, `WAITING_INPUT`, `IDLE`, `ERROR`, and `UNKNOWN`.
 
 | Method | Path | Description |
 |---|---|---|
@@ -85,7 +84,7 @@ The JSON snapshot schema is currently `1.0`. A snapshot contains a stable `insta
 Stream live updates with SSE:
 
 ```bash
-curl -N http://127.0.0.1:8765/api/v1/events
+curl -N -H 'Authorization: Bearer replace-with-a-long-random-token' http://[::1]:8765/api/v1/events
 ```
 
 Forward a Hook event:
@@ -93,6 +92,7 @@ Forward a Hook event:
 ```bash
 curl -X POST http://127.0.0.1:8765/api/v1/hooks/codex \
   -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer replace-with-a-long-random-token' \
   -d '{
     "session_id": "example-session",
     "turn_id": "example-turn",
@@ -120,7 +120,7 @@ Copy [`custom_components/codex_monitor`](custom_components/codex_monitor) into H
 
 1. Open **Settings → Devices & services → Add integration**.
 2. Search for **Codex Monitor**.
-3. Enter the agent's LAN URL, for example `http://192.168.1.20:8765`.
+3. Enter the agent's LAN URL, for example `http://[fd00::20]:8765`, and the API token passed with `--token`.
 
 Each agent installation creates one device using its stable `installation_id`. Home Assistant polls every 5 seconds by default; the interval can be changed to 5–300 seconds in the integration options.
 
@@ -132,7 +132,7 @@ Default entities include workload state, current task, active task count, Codex 
 
 Known task count, usage streak, secondary rate limit, Hook count, and stale-data state are disabled by default and can be enabled from the device page. Full thread JSON is included only in diagnostics to avoid frequent large Recorder entries.
 
-See [`docs/ha-integration-architecture.md`](docs/ha-integration-architecture.md) for the HA design and [`docs/agent-spec-v1.2.zh-CN.md`](docs/agent-spec-v1.2.zh-CN.md) for the agent specification.
+See [`docs/ha-integration-architecture.md`](docs/ha-integration-architecture.md) for the HA design. For third-party clients and AI-assisted development, use the [integration contract](docs/agent-integration-contract.md) and [OpenAPI description](docs/agent-openapi.yaml) as the source of truth.
 
 ### Development
 
@@ -158,7 +158,7 @@ uvx ruff format --check .
 `.github/workflows/release-agent.yml` uses GitHub CLI to create or update a release. Push an `agent-v*` tag or run the workflow manually:
 
 ```bash
-gh workflow run release-agent.yml -f tag=agent-v0.2.0
+gh workflow run release-agent.yml -f tag=agent-v0.3.0
 ```
 
 The workflow validates the tag against the source version, cross-compiles all supported targets, creates archives and `SHA256SUMS.txt`, and publishes them with `gh release create` or `gh release upload`.
@@ -178,7 +178,7 @@ The workflow validates the tag against the source version, cross-compiles all su
 - `agent/`：运行在 Codex 电脑上的 Go 只读监控代理。
 - `custom_components/codex_monitor/`：Home Assistant 自定义集成。
 
-当前版本只读取状态，不提供批准或控制操作。按照项目约定，不设计身份认证：局域网中任何能够访问代理 URL 的设备都可以读取代理暴露的信息。
+当前版本只读取状态，不提供批准或控制操作。代理的每个 API 请求都必须携带 Bearer Token。
 
 ## 功能
 
@@ -206,7 +206,7 @@ flowchart LR
 
 ```bash
 chmod +x codex-monitor-agent
-./codex-monitor-agent --bind 0.0.0.0 --port 8765
+./codex-monitor-agent --token 'replace-with-a-long-random-token'
 ```
 
 也可以从源码构建：
@@ -214,22 +214,21 @@ chmod +x codex-monitor-agent
 ```bash
 cd agent
 go build -o ./bin/codex-monitor-agent ./cmd/cma
-./bin/codex-monitor-agent --bind 0.0.0.0 --port 8765
+./bin/codex-monitor-agent --token 'replace-with-a-long-random-token'
 ```
 
 验证接口：
 
 ```bash
-curl http://127.0.0.1:8765/healthz
-curl http://127.0.0.1:8765/api/v1/version
-curl http://127.0.0.1:8765/api/v1/status
+curl -H 'Authorization: Bearer replace-with-a-long-random-token' http://[::1]:8765/healthz
+curl -H 'Authorization: Bearer replace-with-a-long-random-token' http://[::1]:8765/api/v1/status
 ```
 
-代理默认监听 `0.0.0.0:8765`。Hook 配置、状态来源优先级和更多参数见 [`agent/README.md`](agent/README.md)。
+代理默认监听 `[::]:8765`。Hook 配置和更多参数见 [`agent/README.md`](agent/README.md)。第三方程序或 AI 对接请以 [对接契约](docs/agent-integration-contract.md) 和 [OpenAPI 描述](docs/agent-openapi.yaml) 为准。
 
 ### 代理接口与协议
 
-代理提供无需认证、允许跨域访问的版本化 HTTP API。普通接口返回 UTF-8 JSON，时间使用 RFC 3339，任务状态使用 `RUNNING`、`WAITING_APPROVAL`、`WAITING_INPUT`、`IDLE`、`ERROR` 和 `UNKNOWN` 等大写枚举值。
+代理提供使用 Bearer Token 认证的版本化 HTTP API。所有数据接口必须携带 `Authorization: Bearer <token>`。普通接口返回 UTF-8 JSON，时间使用 RFC 3339，任务状态使用 `RUNNING`、`WAITING_APPROVAL`、`WAITING_INPUT`、`IDLE`、`ERROR` 和 `UNKNOWN` 等大写枚举值。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -249,10 +248,11 @@ curl http://127.0.0.1:8765/api/v1/status
 SSE 和 Hook 示例：
 
 ```bash
-curl -N http://127.0.0.1:8765/api/v1/events
+curl -N -H 'Authorization: Bearer replace-with-a-long-random-token' http://[::1]:8765/api/v1/events
 
 curl -X POST http://127.0.0.1:8765/api/v1/hooks/codex \
   -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer replace-with-a-long-random-token' \
   -d '{"session_id":"example-session","hook_event_name":"PermissionRequest"}'
 ```
 
@@ -272,7 +272,7 @@ curl -X POST http://127.0.0.1:8765/api/v1/hooks/codex \
 
 1. 打开“设置 → 设备与服务 → 添加集成”。
 2. 搜索 **Codex Monitor** 或 **Codex 监控**。
-3. 输入代理的局域网 URL，例如 `http://192.168.1.20:8765`。
+3. 输入代理的局域网 URL（例如 `http://[fd00::20]:8765`）以及启动代理时通过 `--token` 传入的 API Token。
 
 每套代理安装根据稳定的 `installation_id` 创建一个设备。默认每 5 秒更新，可在集成选项中调整到 5–300 秒。
 
@@ -316,7 +316,7 @@ uvx ruff format --check .
 `.github/workflows/release-agent.yml` 使用 GitHub CLI 创建 Release。推送 `agent-v*` 标签会自动交叉编译并上传所有平台制品；也可以手动运行工作流并输入标签：
 
 ```bash
-gh workflow run release-agent.yml -f tag=agent-v0.2.0
+gh workflow run release-agent.yml -f tag=agent-v0.3.0
 ```
 
 工作流会验证标签版本与代理源码版本一致，生成压缩包、`SHA256SUMS.txt`，并通过 `gh release create` 或 `gh release upload` 发布。
