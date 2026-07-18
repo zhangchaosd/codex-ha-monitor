@@ -104,7 +104,7 @@ The [client contract](docs/agent-integration-contract.md) and [OpenAPI document]
 
 ### Install the Home Assistant integration
 
-With HACS, add `https://github.com/zhangchaosd/codex-ha-monitor` as a custom integration repository, install **Codex Monitor**, and restart Home Assistant. For manual installation, copy `custom_components/codex_monitor` into `/config/custom_components/`.
+With HACS, add `https://github.com/zhangchaosd/codex-ha-monitor` as a custom integration repository, install **Codex Monitor**, and restart Home Assistant. For manual installation, run `./install.sh`; it copies `custom_components/codex_monitor` into `/config/custom_components/`. Set `HA_CONFIG_DIR` only when your Home Assistant configuration directory is somewhere other than `/config`.
 
 Then open **Settings → Devices & services → Add integration → Codex Monitor**. A discovered agent can be selected automatically, or enter a LAN URL such as `http://192.168.1.20:8765` and the token. `127.0.0.1` works only when Home Assistant shares the agent's network namespace.
 
@@ -184,7 +184,7 @@ go build -o ./bin/codex-monitor-agent ./cmd/cma
 
 ### 安装 Home Assistant 集成
 
-在 HACS 中把 `https://github.com/zhangchaosd/codex-ha-monitor` 添加为自定义“集成”仓库，安装 **Codex Monitor** 并重启；或把 `custom_components/codex_monitor` 复制到 `/config/custom_components/`。
+在 HACS 中把 `https://github.com/zhangchaosd/codex-ha-monitor` 添加为自定义“集成”仓库，安装 **Codex Monitor** 并重启；手动安装时运行 `./install.sh`，它会把 `custom_components/codex_monitor` 复制到 `/config/custom_components/`。仅当 HA 配置目录不在 `/config` 时才需要设置 `HA_CONFIG_DIR`。
 
 打开“设置 → 设备与服务 → 添加集成 → Codex Monitor”。可以选择自动发现的代理，也可以填写局域网 URL 和 Token。集成使用 SSE 实时更新，默认每 60 秒轮询校准一次，可调整为 5–300 秒。
 
