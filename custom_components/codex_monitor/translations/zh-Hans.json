@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "连接 Codex 监控代理",
-        "description": "请输入运行在 Codex 电脑上的只读代理地址。",
+        "description": "请输入运行在 Codex 电脑上的代理地址。",
         "data": {
           "url": "代理地址",
           "token": "API 令牌",
@@ -23,10 +23,21 @@
           "url": "代理地址",
           "token": "API 令牌"
         }
+      },
+      "reauth_confirm": {
+        "title": "更新 Codex 监控认证",
+        "description": "当前 API 令牌已被代理拒绝，请输入代理正在使用的令牌。",
+        "data": { "token": "API 令牌" }
+      },
+      "zeroconf_confirm": {
+        "title": "连接已发现的 Codex 监控",
+        "description": "在 {url} 发现代理，请输入 API 令牌完成配置。",
+        "data": { "token": "API 令牌", "name": "显示名称（可选）" }
       }
     },
     "error": {
       "cannot_connect": "无法连接代理。",
+      "invalid_auth": "代理拒绝了 API 令牌。",
       "invalid_response": "服务器没有返回受支持的 Codex 监控数据。",
       "invalid_url": "请输入不带查询参数和片段的有效 HTTP 或 HTTPS 地址。",
       "unknown": "发生意外错误，请检查 Home Assistant 日志。"
@@ -34,14 +45,17 @@
     "abort": {
       "already_configured": "此代理已经配置。",
       "unique_id_mismatch": "新地址属于另一套代理安装，不能用于重新配置。",
-      "reconfigure_successful": "代理地址已更新。"
+      "reconfigure_successful": "代理地址已更新。",
+      "reauth_successful": "API 令牌已更新。",
+      "invalid_discovery": "发现记录中没有有效的安装标识。",
+      "discovery_changed": "配置期间发现的代理标识发生了变化。"
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "Codex 监控选项",
-        "description": "设置 Home Assistant 读取本地代理的频率。",
+        "description": "设置备用状态校准间隔；实时变化通过事件流推送。",
         "data": {
           "scan_interval": "轮询间隔（秒）"
         },
@@ -65,7 +79,12 @@
         }
       },
       "current_task": { "name": "当前任务" },
-      "active_threads": { "name": "活动任务数" },
+      "active_threads": { "name": "活动工作流数" },
+      "active_workers": { "name": "活动工作线程数" },
+      "running_tasks": { "name": "运行任务数" },
+      "pending_approvals": { "name": "待批准数" },
+      "pending_inputs": { "name": "待输入数" },
+      "failed_tasks": { "name": "失败任务数" },
       "connection_state": {
         "name": "连接状态",
         "state": {
@@ -73,6 +92,7 @@
           "connecting": "正在连接",
           "disconnected": "已断开",
           "error": "错误",
+          "recovering": "恢复中",
           "unknown": "未知"
         }
       },
@@ -91,7 +111,56 @@
       "connected": { "name": "连接" },
       "running": { "name": "运行" },
       "attention_required": { "name": "需要处理" },
+      "task_problem": { "name": "任务异常" },
       "stale": { "name": "数据过期" }
+    },
+    "event": { "task_activity": { "name": "任务活动" } }
+  },
+  "issues": {
+    "incompatible_agent": {
+      "title": "Codex 监控代理不兼容",
+      "description": "Home Assistant 无法理解代理响应：{error}。请更新代理后重新加载集成。"
+    }
+  },
+  "exceptions": {
+    "device_not_loaded": { "message": "选择的 Codex 监控设备尚未加载。" },
+    "action_failed": { "message": "Codex 操作失败：{error}" }
+  },
+  "services": {
+    "approve_request": {
+      "name": "批准请求",
+      "description": "批准一个明确的 Codex 待处理请求。",
+      "fields": {
+        "device_id": { "name": "设备", "description": "Codex 监控主机。" },
+        "request_id": { "name": "请求 ID", "description": "任务事件中的待处理请求标识。" },
+        "thread_id": { "name": "Thread ID", "description": "Codex Thread 标识。" },
+        "turn_id": { "name": "Turn ID", "description": "Codex Turn 标识。" },
+        "for_session": { "name": "本会话持续批准", "description": "在支持时，同时批准本 App Server 会话内的同类请求。" }
+      }
+    },
+    "reject_request": {
+      "name": "拒绝请求",
+      "description": "拒绝一个明确的 Codex 待处理请求。",
+      "fields": {
+        "device_id": { "name": "设备" }, "request_id": { "name": "请求 ID" },
+        "thread_id": { "name": "Thread ID" }, "turn_id": { "name": "Turn ID" },
+        "cancel_turn": { "name": "取消 Turn", "description": "拒绝请求后同时中断 Turn。" }
+      }
+    },
+    "submit_input": {
+      "name": "提交输入",
+      "description": "回答一个明确的 Codex 用户输入请求。",
+      "fields": {
+        "device_id": { "name": "设备" }, "request_id": { "name": "请求 ID" },
+        "thread_id": { "name": "Thread ID" }, "turn_id": { "name": "Turn ID" },
+        "text": { "name": "文本", "description": "用于单问题请求的文本回答。" },
+        "answers": { "name": "结构化回答", "description": "问题 ID 到回答数组的映射。" }
+      }
+    },
+    "interrupt_turn": {
+      "name": "中断 Turn",
+      "description": "中断一个明确的运行中 Codex Turn。",
+      "fields": { "device_id": { "name": "设备" }, "thread_id": { "name": "Thread ID" }, "turn_id": { "name": "Turn ID" } }
     }
   }
 }

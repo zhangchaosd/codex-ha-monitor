@@ -38,3 +38,33 @@ func TestFilesystemCollectorDetectsActiveTurnAfterTaskComplete(t *testing.T) {
 		t.Fatalf("unexpected threads: %+v", threads)
 	}
 }
+
+func TestFilesystemCollectorExtractsSubagentHierarchy(t *testing.T) {
+	home := t.TempDir()
+	sessions := filepath.Join(home, "sessions", "2026", "07", "18")
+	if err := os.MkdirAll(sessions, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	content := fmt.Sprintf(
+		"{\"timestamp\":%q,\"type\":\"session_meta\",\"payload\":{"+
+			"\"id\":\"child\",\"cwd\":\"/tmp/repo\",\"source\":{"+
+			"\"subagent\":{\"thread_spawn\":{\"parent_thread_id\":\"root\","+
+			"\"agent_nickname\":\"reviewer\",\"agent_role\":\"explorer\"}}}}}\n",
+		now.Format(time.RFC3339Nano),
+	)
+	if err := os.WriteFile(filepath.Join(sessions, "rollout.jsonl"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	threads, err := (FilesystemCollector{Home: home, MaxThreads: 10}).Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 1 {
+		t.Fatalf("unexpected threads: %+v", threads)
+	}
+	thread := threads[0]
+	if thread.SessionID != "child" || thread.ParentThreadID != "root" || thread.AgentNickname != "reviewer" || thread.AgentRole != "explorer" {
+		t.Fatalf("subagent metadata was not preserved: %+v", thread)
+	}
+}

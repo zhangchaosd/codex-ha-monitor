@@ -1,0 +1,90 @@
+approve_request:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: codex_monitor
+    request_id:
+      required: true
+      selector:
+        text:
+    thread_id:
+      required: true
+      selector:
+        text:
+    turn_id:
+      required: true
+      selector:
+        text:
+    for_session:
+      default: false
+      selector:
+        boolean:
+
+reject_request:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: codex_monitor
+    request_id:
+      required: true
+      selector:
+        text:
+    thread_id:
+      required: true
+      selector:
+        text:
+    turn_id:
+      required: true
+      selector:
+        text:
+    cancel_turn:
+      default: false
+      selector:
+        boolean:
+
+submit_input:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: codex_monitor
+    request_id:
+      required: true
+      selector:
+        text:
+    thread_id:
+      required: true
+      selector:
+        text:
+    turn_id:
+      required: true
+      selector:
+        text:
+    text:
+      selector:
+        text:
+          multiline: true
+    answers:
+      selector:
+        object:
+
+interrupt_turn:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: codex_monitor
+    thread_id:
+      required: true
+      selector:
+        text:
+    turn_id:
+      required: true
+      selector:
+        text:

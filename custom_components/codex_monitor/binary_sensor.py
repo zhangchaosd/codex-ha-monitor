@@ -32,8 +32,13 @@ BINARY_SENSOR_DESCRIPTIONS = (
     BinarySensorEntityDescription(
         key="attention_required",
         translation_key="attention_required",
-        device_class=BinarySensorDeviceClass.PROBLEM,
         icon="mdi:account-alert-outline",
+    ),
+    BinarySensorEntityDescription(
+        key="task_problem",
+        translation_key="task_problem",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        icon="mdi:robot-confused-outline",
     ),
     BinarySensorEntityDescription(
         key="stale",
@@ -47,8 +52,9 @@ BINARY_SENSOR_DESCRIPTIONS = (
 
 IS_ON_FUNCTIONS: dict[str, Callable[[MonitorSnapshot], bool]] = {
     "connected": lambda data: data.connection_state == "connected",
-    "running": lambda data: data.workload_state == "running",
-    "attention_required": lambda data: data.workload_state in ("waiting_approval", "waiting_input"),
+    "running": lambda data: data.has_running_tasks,
+    "attention_required": lambda data: data.attention_required,
+    "task_problem": lambda data: data.has_task_problem,
     "stale": lambda data: data.is_stale,
 }
 

@@ -57,6 +57,10 @@ class MonitorSnapshot:
         if not isinstance(status, Mapping):
             raise InvalidSnapshotError("status response is not an object")
 
+        schema_version = status.get("schema_version")
+        if isinstance(schema_version, str) and schema_version.split(".", 1)[0] != "1":
+            raise InvalidSnapshotError(f"unsupported agent schema {schema_version}")
+
         installation_id = status.get("installation_id")
         if not isinstance(installation_id, str) or not installation_id.strip():
             raise InvalidSnapshotError("status response has no installation_id")
@@ -93,13 +97,42 @@ class MonitorSnapshot:
 
     @property
     def active_threads(self) -> float | None:
-        """Return the active thread count."""
-        return _number(_mapping(self.status.get("summary")).get("active_threads"))
+        """Return the number of active root workflows."""
+        summary = _mapping(self.status.get("summary"))
+        value = summary.get("active_workflows", summary.get("active_threads"))
+        return _number(value)
+
+    @property
+    def active_workers(self) -> float | None:
+        """Return the number of active root and subagent workers."""
+        summary = _mapping(self.status.get("summary"))
+        value = summary.get("active_workers", summary.get("active_threads"))
+        return _number(value)
 
     @property
     def known_threads(self) -> float | None:
         """Return the known thread count."""
         return _number(_mapping(self.status.get("summary")).get("known_threads"))
+
+    def state_count(self, state: str) -> float | None:
+        """Return an independently aggregated thread state count."""
+        states = _mapping(_mapping(self.status.get("summary")).get("states"))
+        return _number(states.get(state))
+
+    @property
+    def has_running_tasks(self) -> bool:
+        """Return whether any worker is running, independent of summary priority."""
+        return bool(self.state_count("running"))
+
+    @property
+    def attention_required(self) -> bool:
+        """Return whether any worker needs approval or input."""
+        return bool(self.state_count("waiting_approval")) or bool(self.state_count("waiting_input"))
+
+    @property
+    def has_task_problem(self) -> bool:
+        """Return whether any worker is in an error state."""
+        return bool(self.state_count("error"))
 
     @property
     def current_thread(self) -> Mapping[str, Any] | None:
@@ -192,6 +225,7 @@ class MonitorSnapshot:
             "state_confidence": summary.get("state_confidence"),
             "known_threads": self.known_threads,
             "active_threads": self.active_threads,
+            "active_workers": self.active_workers,
             "states": summary.get("states"),
             "visibility": codex.get("visibility"),
             "last_error": codex.get("last_error"),
@@ -213,6 +247,10 @@ class MonitorSnapshot:
             else {
                 "id": current.get("id"),
                 "turn_id": current.get("turn_id"),
+                "parent_thread_id": current.get("parent_thread_id"),
+                "root_thread_id": current.get("root_thread_id"),
+                "thread_role": current.get("thread_role"),
+                "agent_nickname": current.get("agent_nickname"),
                 "name": current.get("name"),
                 "preview": current.get("preview"),
                 "cwd": current.get("cwd"),
@@ -222,6 +260,9 @@ class MonitorSnapshot:
                 "state_confidence": current.get("state_confidence"),
                 "loaded": current.get("loaded"),
                 "last_hook_event": current.get("last_hook_event"),
+                "attention_type": current.get("attention_type"),
+                "request_id": current.get("request_id"),
+                "controllable": current.get("controllable"),
             },
         }
         serialised = json.dumps(entity_data, sort_keys=True, separators=(",", ":"), default=str)

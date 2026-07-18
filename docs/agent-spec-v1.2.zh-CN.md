@@ -1,6 +1,6 @@
 # Codex 只读监控代理项目规格说明书
 
-> 历史设计文档：其中的无认证和 IPv4 默认监听说明已经过时。第三方客户端、AI 对接和当前运行行为请以 [agent-integration-contract.md](agent-integration-contract.md) 与 [agent-openapi.yaml](agent-openapi.yaml) 为准。
+> **已归档、非规范文档。** 这是最初只读代理的需求基线，其中无认证、IPv4 默认监听、Schema 1.0、无 mDNS、无控制接口等内容均已被 Agent 0.4 / Schema 1.1 取代。请勿按本文实现新客户端；当前行为只以 [agent-integration-contract.md](agent-integration-contract.md) 与 [agent-openapi.yaml](agent-openapi.yaml) 为准。
 
 - 项目代号：Codex Monitor Agent（CMA）
 - 文档版本：1.2

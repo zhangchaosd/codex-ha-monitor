@@ -42,7 +42,6 @@ class CodexMonitorEntity(CoordinatorEntity[CodexMonitorCoordinator]):
         return DeviceInfo(
             identifiers={(DOMAIN, self.coordinator.data.installation_id)},
             name=self._entry.title,
-            manufacturer="OpenAI",
             model=model,
             sw_version=self.coordinator.data.agent_version,
             configuration_url=self._entry.data[CONF_URL],

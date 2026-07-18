@@ -1,15 +1,16 @@
-"""Test bootstrap that loads pure integration modules without Home Assistant."""
+"""Shared Home Assistant custom-integration test fixtures."""
 
 import sys
 from pathlib import Path
-from types import ModuleType
 
-ROOT = Path(__file__).parents[1] / "custom_components"
+import pytest
 
-custom_components = ModuleType("custom_components")
-custom_components.__path__ = [str(ROOT)]
-sys.modules.setdefault("custom_components", custom_components)
+sys.path.insert(0, str(Path(__file__).parents[1]))
 
-codex_monitor = ModuleType("custom_components.codex_monitor")
-codex_monitor.__path__ = [str(ROOT / "codex_monitor")]
-sys.modules.setdefault("custom_components.codex_monitor", codex_monitor)
+pytest_plugins = "pytest_homeassistant_custom_component"
+
+
+@pytest.fixture(autouse=True)
+def auto_enable_custom_integrations(enable_custom_integrations):
+    """Allow Home Assistant to load this repository's custom integration."""
+    yield

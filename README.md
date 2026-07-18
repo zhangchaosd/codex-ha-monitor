@@ -7,45 +7,40 @@
 
 ## English
 
-Expose the runtime state of Codex Desktop and Codex CLI to Home Assistant over a local network.
+Codex HA Monitor exposes Codex Desktop and CLI activity to Home Assistant over the local network. It is designed around the way an AI-agent user works: one top-level workflow may have several concurrent subagents, attention requests must remain visible while other tasks keep running, and important transitions must be automatable rather than inferred from a frequently changing text sensor.
 
-This repository contains two components:
+The repository contains:
 
-- `agent/`: a read-only Go monitoring agent that runs on the Codex computer.
-- `custom_components/codex_monitor/`: a Home Assistant custom integration.
+- `agent/`: a Go service that runs on every computer using Codex.
+- `custom_components/codex_monitor/`: a Home Assistant local-push integration.
 
-The current release is read-only and does not provide approval or control operations. The agent requires a bearer token for every API request.
+### What it provides
 
-### Features
-
-- Reports whether Codex is running, idle, waiting for approval, waiting for input, or in an error state.
-- Reports the current task, active task count, and app-server connection state.
-- Reports the Codex CLI version, agent version, token usage, and rate-limit reset time.
-- Combines Codex Hooks, Codex app-server data, and session-filesystem inference.
-- Provides Home Assistant UI configuration, multiple hosts, English/Chinese translations, and diagnostics.
-- Uses GitHub Actions to test the project and publish agent binaries for macOS, Linux, and Windows.
-
-### Architecture
+- Exact or inferred per-thread states: `RUNNING`, `WAITING_APPROVAL`, `WAITING_INPUT`, `IDLE`, `ERROR`, and `UNKNOWN`.
+- Root-workflow and active-worker counts, including Codex subagent parent/root relationships.
+- Independent running, attention-required, and failure facts. One approval no longer hides another running worker.
+- Codex and agent versions, token usage, rate limits, Hooks, source, confidence, and staleness.
+- Authenticated SSE snapshots plus replayable, sequenced task events.
+- Zeroconf discovery with stable installation identity and manual URL configuration as a fallback.
+- Optional actions to approve/reject a request, submit requested input, or interrupt an exact turn.
 
 ```mermaid
 flowchart LR
-    C["Codex Desktop / CLI"] --> A["Go Monitor Agent"]
-    F["Codex session files"] --> A
+    C["Codex Desktop / CLI"] --> A["Go monitor agent"]
+    F["Session files"] --> A
     H["Codex Hooks"] --> A
-    A -->|"LAN HTTP API"| I["Home Assistant integration"]
-    I --> E["Entities / automations / dashboards"]
+    A -->|"JSON + replayable SSE"| I["Home Assistant integration"]
+    I --> E["Entities / task events / automations"]
+    I -->|"Exact request or turn action"| A
 ```
 
-### 1. Install the agent
+### Control boundary
 
-Download the archive for your platform from [Releases](https://github.com/zhangchaosd/codex-ha-monitor/releases), extract it, and run:
+The agent starts its own Codex App Server connection. A request is actionable only when that request arrived on this connection; it is then reported with `controllable: true` and a `request_id`. Existing Codex Desktop windows normally use a separate App Server process. Their session files can still be monitored, including multiple concurrent threads, but Desktop-owned approval prompts cannot be answered through the agent and are reported as non-controllable. The API rejects stale, mismatched, and non-controllable requests instead of guessing.
 
-```bash
-chmod +x codex-monitor-agent
-./codex-monitor-agent --token 'replace-with-a-long-random-token'
-```
+### Install and run the agent
 
-Or build it from source:
+Download a binary from [GitHub Releases](https://github.com/zhangchaosd/codex-ha-monitor/releases), or build it:
 
 ```bash
 cd agent
@@ -53,163 +48,125 @@ go build -o ./bin/codex-monitor-agent ./cmd/cma
 ./bin/codex-monitor-agent --token 'replace-with-a-long-random-token'
 ```
 
-Verify the service:
+The default listener is `[::]:8765`; mDNS advertises `_codex-monitor._tcp.local.`. Verify it with:
 
 ```bash
-curl -H 'Authorization: Bearer replace-with-a-long-random-token' http://[::1]:8765/healthz
-curl -H 'Authorization: Bearer replace-with-a-long-random-token' http://[::1]:8765/api/v1/status
+curl -H 'Authorization: Bearer replace-with-a-long-random-token' \
+  http://[::1]:8765/api/v1/version
+curl -H 'Authorization: Bearer replace-with-a-long-random-token' \
+  http://[::1]:8765/api/v1/status
 ```
 
-The agent listens on `[::]:8765` by default. See [`agent/README.md`](agent/README.md) for Hook setup and command-line options, and see the [AI/client integration contract](docs/agent-integration-contract.md) plus [OpenAPI description](docs/agent-openapi.yaml) when building another client.
+See [agent/README.md](agent/README.md) for flags and Hook setup.
 
-### Agent API and protocols
+### Agent API and protocol
 
-The agent exposes a versioned HTTP API. Every data endpoint requires `Authorization: Bearer <token>`. Normal API responses use UTF-8 JSON; timestamps use RFC 3339; workload states use uppercase values such as `RUNNING`, `WAITING_APPROVAL`, `WAITING_INPUT`, `IDLE`, `ERROR`, and `UNKNOWN`.
+The current schema is `1.1`. API responses are UTF-8 JSON, timestamps are RFC 3339, and API routes require `Authorization: Bearer <token>`. Clients must ignore unknown fields and must not treat `UNKNOWN` as `IDLE`.
 
-| Method | Path | Description |
+| Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/` | Built-in HTML status dashboard. |
-| `GET` | `/healthz` | Process liveness, agent version, and uptime. |
-| `GET` | `/readyz` | Snapshot, app-server, filesystem, and Hook readiness details. |
-| `GET` | `/api/v1/version` | Schema version, stable installation ID, agent version, Codex CLI version, and app-server details. |
-| `GET` | `/api/v1/status` | Current host, connection, workload summary, Hooks, usage, and rate limits. The thread list is omitted. |
-| `GET` | `/api/v1/threads?limit=100` | Recent Codex threads. `limit` accepts `1`–`200` and defaults to `100`. |
-| `GET` | `/api/v1/usage?days=0..365` | Token usage summary and bounded daily buckets when available. The agent retains 90 days by default. |
-| `GET` | `/api/v1/rate-limits` | Primary/secondary rate-limit windows and reset information when available. |
-| `GET` | `/api/v1/events` | Server-Sent Events stream. Each update is an `event: snapshot` carrying a full JSON snapshot in `data:`. |
-| `POST` | `/api/v1/hooks/codex` | Receives a native Codex Hook JSON payload, up to 1 MiB, and returns the derived task state. |
+| `GET` | `/` | Built-in status page. |
+| `GET` | `/healthz`, `/readyz` | Liveness and source readiness. |
+| `GET` | `/api/v1/version` | Schema, stable installation ID, agent and Codex versions. |
+| `GET` | `/api/v1/status` | Host, aggregate states, connectivity, Hooks, usage summary, limits, and pending requests. |
+| `GET` | `/api/v1/threads?limit=100` | Per-thread state, hierarchy, request ID, and controllability. |
+| `GET` | `/api/v1/requests` | Pending approval/input requests. |
+| `GET` | `/api/v1/usage?days=30` | Bounded usage history. |
+| `GET` | `/api/v1/rate-limits` | Primary and secondary rate-limit windows. |
+| `GET` | `/api/v1/events` | SSE `snapshot` and replayable `task_activity` events. |
+| `POST` | `/api/v1/hooks/codex` | Native Codex Hook receiver. |
+| `POST` | `/api/v1/actions/approve` | Approve one exact pending request. |
+| `POST` | `/api/v1/actions/reject` | Reject one exact pending request. |
+| `POST` | `/api/v1/actions/submit-input` | Answer one exact input request. |
+| `POST` | `/api/v1/actions/interrupt` | Interrupt one exact thread and turn. |
 
-The JSON snapshot schema is currently `1.0`. A snapshot contains a stable `installation_id`, generation time, host and version information, Codex connectivity, state provenance/confidence, workload counts, thread data, Hook activity, usage, and rate-limit data. Consumers should ignore unknown fields for forward compatibility.
-
-Stream live updates with SSE:
-
-```bash
-curl -N -H 'Authorization: Bearer replace-with-a-long-random-token' http://[::1]:8765/api/v1/events
-```
-
-Forward a Hook event:
+SSE task events use increasing numeric IDs. Reconnect with `Last-Event-ID`; the agent replays retained events before sending the current snapshot. Timestamp-only reconciliations are deduplicated, and daily usage history remains on `/usage` rather than bloating each live snapshot:
 
 ```bash
-curl -X POST http://127.0.0.1:8765/api/v1/hooks/codex \
-  -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer replace-with-a-long-random-token' \
-  -d '{
-    "session_id": "example-session",
-    "turn_id": "example-turn",
-    "cwd": "/path/to/project",
-    "hook_event_name": "PermissionRequest",
-    "tool_name": "Bash"
-  }'
+curl -N -H 'Authorization: Bearer replace-with-a-long-random-token' \
+  -H 'Last-Event-ID: 41' http://[::1]:8765/api/v1/events
 ```
 
-`session_id` and `hook_event_name` are required. Invalid Hook payloads return HTTP `400`; unsupported methods return `405`. The project does not currently expose a WebSocket or a control/approval API.
+Task event types are `task_started`, `task_completed`, `approval_required`, `input_required`, `task_failed`, `task_interrupted`, `task_resumed`, and `agent_recovered`. The in-memory replay window retains the latest 256 task events.
 
-### 2. Install the Home Assistant integration
+Example approval body:
 
-#### HACS
+```json
+{
+  "request_id": "req-42",
+  "thread_id": "thread-id",
+  "turn_id": "turn-id",
+  "for_session": false
+}
+```
 
-1. Add `https://github.com/zhangchaosd/codex-ha-monitor` as a custom integration repository in HACS.
-2. Install **Codex Monitor**.
-3. Restart Home Assistant.
+The [client contract](docs/agent-integration-contract.md) and [OpenAPI document](docs/agent-openapi.yaml) are the protocol source of truth.
 
-#### Manual installation
+### Install the Home Assistant integration
 
-Copy [`custom_components/codex_monitor`](custom_components/codex_monitor) into Home Assistant's `/config/custom_components/` directory and restart Home Assistant.
+With HACS, add `https://github.com/zhangchaosd/codex-ha-monitor` as a custom integration repository, install **Codex Monitor**, and restart Home Assistant. For manual installation, copy `custom_components/codex_monitor` into `/config/custom_components/`.
 
-### 3. Configure Home Assistant
+Then open **Settings → Devices & services → Add integration → Codex Monitor**. A discovered agent can be selected automatically, or enter a LAN URL such as `http://192.168.1.20:8765` and the token. `127.0.0.1` works only when Home Assistant shares the agent's network namespace.
 
-1. Open **Settings → Devices & services → Add integration**.
-2. Search for **Codex Monitor**.
-3. Enter the agent's LAN URL, for example `http://[fd00::20]:8765`, and the API token passed with `--token`.
+The integration uses SSE for live updates and a 60-second reconciliation poll by default. The fallback interval is configurable from 5 to 300 seconds.
 
-Each agent installation creates one device using its stable `installation_id`. Home Assistant polls every 5 seconds by default; the interval can be changed to 5–300 seconds in the integration options.
+### Home Assistant model
 
-`127.0.0.1` works only when Home Assistant and the agent share the same network namespace. Home Assistant OS, Docker, and separate-host installations normally need the Codex computer's LAN IP address.
+One agent installation is one HA device. Default entities include workload state, current task, active workflows, connection state, Codex/agent versions, primary rate limit, running, attention required, task problem, and a `task_activity` event entity. Worker and per-state counters, usage details, Hooks, secondary limits, and stale data are available as disabled-by-default diagnostic entities.
 
-### Home Assistant entities
+The event entity is the preferred automation trigger. Four HA actions are registered:
 
-Default entities include workload state, current task, active task count, Codex connection, Codex/agent versions, lifetime tokens, rate-limit usage/reset, running state, and attention required.
+- `codex_monitor.approve_request`
+- `codex_monitor.reject_request`
+- `codex_monitor.submit_input`
+- `codex_monitor.interrupt_turn`
 
-Known task count, usage streak, secondary rate limit, Hook count, and stale-data state are disabled by default and can be enabled from the device page. Full thread JSON is included only in diagnostics to avoid frequent large Recorder entries.
+Each action targets a Codex Monitor device and requires the exact IDs from the task event/current-task attributes. See the [HA architecture](docs/ha-integration-architecture.md) and the included [attention notification blueprint](blueprints/automation/codex_monitor_attention.yaml).
 
-See [`docs/ha-integration-architecture.md`](docs/ha-integration-architecture.md) for the HA design. For third-party clients and AI-assisted development, use the [integration contract](docs/agent-integration-contract.md) and [OpenAPI description](docs/agent-openapi.yaml) as the source of truth.
-
-### Development
-
-Agent:
+### Development and release
 
 ```bash
 cd agent
-go test ./...
+go test -race ./...
 go vet ./...
 go build ./cmd/cma
+
+cd ..
+uv run --isolated --python 3.13 \
+  --with pytest-homeassistant-custom-component --with ruff pytest -q
+uv run --isolated --python 3.13 \
+  --with pytest-homeassistant-custom-component --with ruff ruff check .
 ```
 
-Home Assistant integration:
+Push an `agent-v*` tag or run `release-agent.yml` manually to cross-compile macOS, Linux, and Windows archives and publish them with GitHub CLI.
 
-```bash
-uv run --python 3.13 --with aiohttp --with pytest --with pytest-asyncio pytest -q
-uvx ruff check .
-uvx ruff format --check .
-```
-
-### Publishing agent binaries
-
-`.github/workflows/release-agent.yml` uses GitHub CLI to create or update a release. Push an `agent-v*` tag or run the workflow manually:
-
-```bash
-gh workflow run release-agent.yml -f tag=agent-v0.3.0
-```
-
-The workflow validates the tag against the source version, cross-compiles all supported targets, creates archives and `SHA256SUMS.txt`, and publishes them with `gh release create` or `gh release upload`.
-
-### License
-
-[MIT](LICENSE)
+License: [MIT](LICENSE)
 
 ---
 
 ## 简体中文
 
-在局域网中把 Codex Desktop/CLI 的运行状态接入 Home Assistant。
+Codex HA Monitor 把局域网内 Codex Desktop/CLI 的运行状态接入 Home Assistant。设计以 AI Agent 使用者为中心：一个根工作流可以同时运行多个子代理；等待批准不能遮蔽仍在运行的其他任务；关键状态变化应当成为可自动化的事件，而不是依赖高频轮询一个文本传感器。
 
-本仓库包含两个组件：
+仓库包含运行在 Codex 电脑上的 Go 代理，以及 `custom_components/codex_monitor` Home Assistant 本地推送集成。
 
-- `agent/`：运行在 Codex 电脑上的 Go 只读监控代理。
-- `custom_components/codex_monitor/`：Home Assistant 自定义集成。
+### 主要能力
 
-当前版本只读取状态，不提供批准或控制操作。代理的每个 API 请求都必须携带 Bearer Token。
+- 按会话展示运行、等待批准、等待输入、空闲、失败和未知状态。
+- 区分根工作流与活动 worker，并保留子代理的父/根会话关系。
+- 独立表达“正在运行”“需要处理”“任务失败”，多会话不会互相覆盖。
+- 展示 Codex/代理版本、Token 用量、限额、Hook、来源、置信度和数据陈旧状态。
+- 使用带重放序号的 SSE 推送任务事件，断线后自动恢复，并用低频轮询校准。
+- 通过 Zeroconf 自动发现，也支持手动填写 URL。
+- 对可控请求执行批准、拒绝、提交输入和精确中断 turn。
 
-## 功能
+### 控制能力边界
 
-- 展示 Codex 是否运行、空闲、等待批准、等待输入或发生错误。
-- 展示当前任务、活动任务数和连接状态。
-- 展示 Codex CLI 版本、代理版本、Token 用量和限额重置时间。
-- 同时支持 Hook、Codex app-server 和会话文件系统数据源。
-- Home Assistant UI 配置、多主机、中文/英文翻译和诊断下载。
-- GitHub Actions 自动测试并发布 macOS、Linux 和 Windows 代理二进制。
+代理会启动自己的 Codex App Server。只有通过这条连接到达代理的请求才会标记为 `controllable: true`，并提供 `request_id`。Codex Desktop 通常使用另一个独立 App Server 进程，因此代理能通过会话文件监控 Desktop 的多个并发任务，但不能替 Desktop 回答它持有的批准弹窗。不可控、已过期或 ID 不匹配的操作会被明确拒绝，不会猜测目标。
 
-## 架构
+### 安装代理
 
-```mermaid
-flowchart LR
-    C["Codex Desktop / CLI"] --> A["Go Monitor Agent"]
-    F["Codex 会话文件"] --> A
-    H["Codex Hook"] --> A
-    A -->|"LAN HTTP API"| I["Home Assistant Integration"]
-    I --> E["传感器 / 自动化 / 仪表盘"]
-```
-
-## 1. 安装代理
-
-从 [Releases](https://github.com/zhangchaosd/codex-ha-monitor/releases) 下载对应平台的压缩包，解压后运行：
-
-```bash
-chmod +x codex-monitor-agent
-./codex-monitor-agent --token 'replace-with-a-long-random-token'
-```
-
-也可以从源码构建：
+从 [Releases](https://github.com/zhangchaosd/codex-ha-monitor/releases) 下载二进制，或从源码构建：
 
 ```bash
 cd agent
@@ -217,110 +174,22 @@ go build -o ./bin/codex-monitor-agent ./cmd/cma
 ./bin/codex-monitor-agent --token 'replace-with-a-long-random-token'
 ```
 
-验证接口：
+默认监听 `[::]:8765`，并发布 `_codex-monitor._tcp.local.` mDNS 服务。详细参数和 Hook 配置见 [agent/README.md](agent/README.md)。
 
-```bash
-curl -H 'Authorization: Bearer replace-with-a-long-random-token' http://[::1]:8765/healthz
-curl -H 'Authorization: Bearer replace-with-a-long-random-token' http://[::1]:8765/api/v1/status
-```
+### 接口与协议
 
-代理默认监听 `[::]:8765`。Hook 配置和更多参数见 [`agent/README.md`](agent/README.md)。第三方程序或 AI 对接请以 [对接契约](docs/agent-integration-contract.md) 和 [OpenAPI 描述](docs/agent-openapi.yaml) 为准。
+当前 Schema 为 `1.1`。API 使用 UTF-8 JSON 和 RFC 3339 时间；所有 API 路由都要求 `Authorization: Bearer <token>`。主要接口包括版本、状态、会话、待处理请求、用量、限额、SSE、Codex Hook，以及批准、拒绝、输入和中断操作。完整字段和错误语义见 [客户端契约](docs/agent-integration-contract.md) 与 [OpenAPI](docs/agent-openapi.yaml)。
 
-### 代理接口与协议
+`/api/v1/events` 推送 `snapshot` 和带递增 ID 的 `task_activity`。客户端重连时发送 `Last-Event-ID`，代理会重放内存中保留的最近 256 个任务事件。事件类型包括任务开始/完成/失败/中断/恢复、需要批准、需要输入和代理恢复。
 
-代理提供使用 Bearer Token 认证的版本化 HTTP API。所有数据接口必须携带 `Authorization: Bearer <token>`。普通接口返回 UTF-8 JSON，时间使用 RFC 3339，任务状态使用 `RUNNING`、`WAITING_APPROVAL`、`WAITING_INPUT`、`IDLE`、`ERROR` 和 `UNKNOWN` 等大写枚举值。
+### 安装 Home Assistant 集成
 
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| `GET` | `/` | 内置 HTML 状态页面。 |
-| `GET` | `/healthz` | 进程健康、代理版本和运行时长。 |
-| `GET` | `/readyz` | 快照、app-server、文件系统和 Hook 就绪信息。 |
-| `GET` | `/api/v1/version` | Schema、安装 ID、代理版本、Codex CLI 版本及 app-server 信息。 |
-| `GET` | `/api/v1/status` | 主机、连接、工作摘要、Hook、用量和限额；不包含任务数组。 |
-| `GET` | `/api/v1/threads?limit=100` | 最近任务，`limit` 范围为 `1`–`200`，默认 `100`。 |
-| `GET` | `/api/v1/usage?days=0..365` | Token 用量摘要和有上限的每日用量桶；代理默认保留最近 90 天。 |
-| `GET` | `/api/v1/rate-limits` | 主/次限额窗口及重置时间。 |
-| `GET` | `/api/v1/events` | SSE 实时流；事件名为 `snapshot`，`data:` 携带完整 JSON 快照。 |
-| `POST` | `/api/v1/hooks/codex` | 接收最大 1 MiB 的 Codex 原生 Hook JSON，并返回推导出的任务状态。 |
+在 HACS 中把 `https://github.com/zhangchaosd/codex-ha-monitor` 添加为自定义“集成”仓库，安装 **Codex Monitor** 并重启；或把 `custom_components/codex_monitor` 复制到 `/config/custom_components/`。
 
-当前快照 Schema 为 `1.0`。Hook 请求必须包含 `session_id` 和 `hook_event_name`；无效请求返回 HTTP `400`，不支持的方法返回 `405`。当前没有 WebSocket、批准或其他控制接口。
+打开“设置 → 设备与服务 → 添加集成 → Codex Monitor”。可以选择自动发现的代理，也可以填写局域网 URL 和 Token。集成使用 SSE 实时更新，默认每 60 秒轮询校准一次，可调整为 5–300 秒。
 
-SSE 和 Hook 示例：
+每个代理安装对应一个 HA 设备。默认实体覆盖工作负载状态、当前任务、活动工作流、连接、版本、主限额、运行、需要处理、任务异常和 `task_activity` 事件；worker 数量、各状态计数、用量、Hook、次限额和陈旧状态作为默认关闭的诊断实体提供。
 
-```bash
-curl -N -H 'Authorization: Bearer replace-with-a-long-random-token' http://[::1]:8765/api/v1/events
+集成注册四个 Action：`approve_request`、`reject_request`、`submit_input`、`interrupt_turn`。每次操作都需要事件或当前任务属性中的精确 ID。设计细节见 [HA 架构文档](docs/ha-integration-architecture.md)，通知示例见 [自动化蓝图](blueprints/automation/codex_monitor_attention.yaml)。
 
-curl -X POST http://127.0.0.1:8765/api/v1/hooks/codex \
-  -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer replace-with-a-long-random-token' \
-  -d '{"session_id":"example-session","hook_event_name":"PermissionRequest"}'
-```
-
-## 2. 安装 Home Assistant 集成
-
-### HACS
-
-1. 在 HACS 中添加自定义存储库：`https://github.com/zhangchaosd/codex-ha-monitor`。
-2. 类别选择“集成”。
-3. 安装 **Codex Monitor** 并重启 Home Assistant。
-
-### 手动安装
-
-把 [`custom_components/codex_monitor`](custom_components/codex_monitor) 复制到 Home Assistant 的 `/config/custom_components/`，然后重启 Home Assistant。
-
-## 3. 配置 Home Assistant
-
-1. 打开“设置 → 设备与服务 → 添加集成”。
-2. 搜索 **Codex Monitor** 或 **Codex 监控**。
-3. 输入代理的局域网 URL（例如 `http://[fd00::20]:8765`）以及启动代理时通过 `--token` 传入的 API Token。
-
-每套代理安装根据稳定的 `installation_id` 创建一个设备。默认每 5 秒更新，可在集成选项中调整到 5–300 秒。
-
-`127.0.0.1` 只有在 Home Assistant 和代理处于同一网络命名空间时才有效；Home Assistant OS、Docker 或独立主机通常需要填写 Codex 电脑的局域网 IP。
-
-## Home Assistant 实体
-
-默认实体包括：
-
-- 工作状态、当前任务、活动任务数
-- Codex 连接状态和连接二元传感器
-- Codex/代理版本
-- 累计 Token、限额已用比例和重置时间
-- 运行中、需要处理二元传感器
-
-已知任务数、连续使用天数、次级限额、Hook 计数和数据过期状态默认禁用，可在设备页面手动启用。完整任务 JSON 只出现在诊断下载中，避免 Home Assistant Recorder 频繁保存大块属性。
-
-HA 集成的详细设计见 [`docs/ha-integration-architecture.md`](docs/ha-integration-architecture.md)，代理规格见 [`docs/agent-spec-v1.2.zh-CN.md`](docs/agent-spec-v1.2.zh-CN.md)。
-
-## 开发
-
-代理：
-
-```bash
-cd agent
-go test ./...
-go vet ./...
-go build ./cmd/cma
-```
-
-HA 集成：
-
-```bash
-uv run --python 3.13 --with aiohttp --with pytest --with pytest-asyncio pytest -q
-uvx ruff check .
-uvx ruff format --check .
-```
-
-## 发布代理二进制
-
-`.github/workflows/release-agent.yml` 使用 GitHub CLI 创建 Release。推送 `agent-v*` 标签会自动交叉编译并上传所有平台制品；也可以手动运行工作流并输入标签：
-
-```bash
-gh workflow run release-agent.yml -f tag=agent-v0.3.0
-```
-
-工作流会验证标签版本与代理源码版本一致，生成压缩包、`SHA256SUMS.txt`，并通过 `gh release create` 或 `gh release upload` 发布。
-
-## License
-
-[MIT](LICENSE)
+本项目使用 [MIT License](LICENSE)。

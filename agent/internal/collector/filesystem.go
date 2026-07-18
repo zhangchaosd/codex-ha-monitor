@@ -134,8 +134,9 @@ func (c FilesystemCollector) parseSession(file sessionFile, titles map[string]st
 	if err := scanRecords(io.LimitReader(f, tailBytes), func(record sessionRecord) {
 		if record.Type == "session_meta" && thread.ID == "" {
 			thread.ID = record.Payload.ID
+			thread.SessionID = record.Payload.ID
 			thread.CWD = record.Payload.CWD
-			thread.Source = stringifySource(record.Payload.Source)
+			thread.Source, thread.ParentThreadID, thread.AgentNickname, thread.AgentRole = sourceMetadata(record.Payload.Source)
 			thread.CLIVersion = record.Payload.CLIVersion
 		}
 	}); err != nil {
@@ -229,4 +230,26 @@ func stringifySource(value any) string {
 		}
 		return string(data)
 	}
+}
+
+func sourceMetadata(value any) (source, parentThreadID, agentNickname, agentRole string) {
+	source = stringifySource(value)
+	data, err := json.Marshal(value)
+	if err != nil {
+		return source, "", "", ""
+	}
+	var metadata struct {
+		Subagent struct {
+			ThreadSpawn *struct {
+				ParentThreadID string `json:"parent_thread_id"`
+				AgentNickname  string `json:"agent_nickname"`
+				AgentRole      string `json:"agent_role"`
+			} `json:"thread_spawn"`
+		} `json:"subagent"`
+	}
+	if json.Unmarshal(data, &metadata) != nil || metadata.Subagent.ThreadSpawn == nil {
+		return source, "", "", ""
+	}
+	spawn := metadata.Subagent.ThreadSpawn
+	return source, spawn.ParentThreadID, spawn.AgentNickname, spawn.AgentRole
 }

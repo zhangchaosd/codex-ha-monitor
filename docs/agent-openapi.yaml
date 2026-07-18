@@ -1,8 +1,13 @@
 openapi: 3.1.0
 info:
   title: Codex Monitor Agent API
-  version: 0.3.1
-  description: Read-only local-network API. All API endpoints require a bearer token.
+  version: 0.4.0
+  license:
+    name: MIT
+    identifier: MIT
+  description: >-
+    Local-network Codex monitoring, replayable task events, and exact-request
+    control API. Schema version 1.1. All paths in this document require a bearer token.
 servers:
   - url: http://[::1]:8765
 security:
@@ -10,19 +15,30 @@ security:
 paths:
   /healthz:
     get:
+      operationId: getHealth
       summary: Process liveness
       responses:
-        '200': {description: Agent is running}
+        '200':
+          description: Agent is running
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
         '401': {$ref: '#/components/responses/Unauthorized'}
   /readyz:
     get:
-      summary: Agent readiness
+      operationId: getReadiness
+      summary: Data-source readiness
       responses:
-        '200': {description: Readiness response}
+        '200':
+          description: App Server, filesystem, and Hook readiness
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
         '401': {$ref: '#/components/responses/Unauthorized'}
   /api/v1/version:
     get:
-      summary: Agent and Codex versions
+      operationId: getVersion
+      summary: Agent identity and software versions
       responses:
         '200':
           description: Version response
@@ -32,6 +48,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
   /api/v1/status:
     get:
+      operationId: getStatus
       summary: Current aggregate snapshot without threads
       responses:
         '200':
@@ -42,7 +59,8 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
   /api/v1/threads:
     get:
-      summary: Recent thread summaries
+      operationId: listThreads
+      summary: Recent per-thread state and hierarchy
       parameters:
         - in: query
           name: limit
@@ -56,35 +74,78 @@ paths:
                 type: object
                 required: [schema_version, generated_at, threads]
                 properties:
-                  schema_version: {type: string}
+                  schema_version: {type: string, example: '1.1'}
                   generated_at: {type: string, format: date-time}
-                  threads: {type: array, items: {$ref: '#/components/schemas/Thread'}}
+                  threads:
+                    type: array
+                    items: {$ref: '#/components/schemas/Thread'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /api/v1/requests:
+    get:
+      operationId: listPendingRequests
+      summary: Pending approval and input requests
+      responses:
+        '200':
+          description: Pending requests, including visibility and controllability
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [requests]
+                properties:
+                  requests:
+                    type: array
+                    items: {$ref: '#/components/schemas/PendingRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
   /api/v1/usage:
     get:
+      operationId: getUsage
       summary: Codex usage data with bounded daily history
       parameters:
         - in: query
           name: days
-          description: Return at most this many daily buckets. Zero returns no buckets; values above the agent retention limit are capped.
+          description: >-
+            Maximum daily buckets. Zero returns no buckets; values above agent
+            retention are capped.
           schema: {type: integer, minimum: 0, maximum: 365}
       responses:
-        '200': {description: Usage payload from Codex App Server, with availability field}
+        '200': {description: Codex usage object with an availability field}
+        '400': {description: Invalid days value}
         '401': {$ref: '#/components/responses/Unauthorized'}
   /api/v1/rate-limits:
     get:
-      summary: Codex rate-limit data
+      operationId: getRateLimits
+      summary: Codex account rate limits
       responses:
-        '200': {description: Rate-limit payload from Codex App Server, with availability field}
+        '200': {description: Rate-limit object with an availability field}
         '401': {$ref: '#/components/responses/Unauthorized'}
   /api/v1/events:
     get:
-      summary: Snapshot Server-Sent Events stream
+      operationId: listenForEvents
+      summary: Snapshot and replayable task-activity SSE stream
+      description: >-
+        Send Last-Event-ID to replay retained task events with greater numeric
+        IDs. The stream then sends the current snapshot and live messages.
+      parameters:
+        - in: header
+          name: Last-Event-ID
+          schema: {type: string}
       responses:
-        '200': {description: text/event-stream with event name snapshot}
+        '200':
+          description: >-
+            text/event-stream using event names snapshot and task_activity;
+            task_activity messages have numeric id fields.
+          content:
+            text/event-stream:
+              schema:
+                description: JSON data object carried by each named SSE message.
+                oneOf:
+                  - {$ref: '#/components/schemas/Snapshot'}
+                  - {$ref: '#/components/schemas/TaskEvent'}
         '401': {$ref: '#/components/responses/Unauthorized'}
   /api/v1/hooks/codex:
     post:
+      operationId: recordCodexHook
       summary: Receive a native Codex Hook event
       requestBody:
         required: true
@@ -92,9 +153,82 @@ paths:
           application/json:
             schema: {$ref: '#/components/schemas/HookEvent'}
       responses:
-        '200': {description: Hook result}
-        '400': {description: Invalid Hook JSON or required identity missing}
+        '200': {description: Hook state mapping result}
+        '400': {description: Invalid Hook JSON or missing session identity}
         '401': {$ref: '#/components/responses/Unauthorized'}
+  /api/v1/actions/approve:
+    post:
+      operationId: approveRequest
+      summary: Approve one exact pending request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - {$ref: '#/components/schemas/ExactRequestAction'}
+                - type: object
+                  properties:
+                    for_session: {type: boolean, default: false}
+      responses: &actionResponses
+        '200': {$ref: '#/components/responses/ActionAccepted'}
+        '400': {description: Malformed action JSON}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {description: Pending request no longer exists}
+        '405': {description: Wrong HTTP method}
+        '409': {description: Request IDs/type mismatch or request is not controllable}
+        '502': {description: Codex App Server rejected or failed the action}
+        '503': {description: Agent-owned App Server is unavailable}
+  /api/v1/actions/reject:
+    post:
+      operationId: rejectRequest
+      summary: Reject one exact pending request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - {$ref: '#/components/schemas/ExactRequestAction'}
+                - type: object
+                  properties:
+                    cancel_turn: {type: boolean, default: false}
+      responses: *actionResponses
+  /api/v1/actions/submit-input:
+    post:
+      operationId: submitInput
+      summary: Answer one exact pending input request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - {$ref: '#/components/schemas/ExactRequestAction'}
+                - type: object
+                  properties:
+                    text: {type: string}
+                    answers:
+                      type: object
+                      additionalProperties:
+                        type: array
+                        items: {type: string}
+      responses: *actionResponses
+  /api/v1/actions/interrupt:
+    post:
+      operationId: interruptTurn
+      summary: Interrupt one exact thread and turn
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [thread_id, turn_id]
+              properties:
+                thread_id: {type: string, minLength: 1}
+                turn_id: {type: string, minLength: 1}
+      responses: *actionResponses
 components:
   securitySchemes:
     bearerAuth:
@@ -102,50 +236,190 @@ components:
       scheme: bearer
   responses:
     Unauthorized:
-      description: Missing or invalid Authorization bearer token
+      description: Missing or rejected bearer token
+    ActionAccepted:
+      description: Action accepted by the exact App Server connection
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ActionResult'}
   schemas:
     Version:
       type: object
       required: [schema_version, installation_id, agent, codex_cli, app_server]
       properties:
-        schema_version: {type: string, example: '1.0'}
-        installation_id: {type: string}
+        schema_version: {type: string, example: '1.1'}
+        installation_id: {type: string, minLength: 1}
         agent: {type: object, additionalProperties: true}
         codex_cli: {type: object, additionalProperties: true}
         app_server: {type: object, additionalProperties: true}
     Snapshot:
       type: object
-      required: [schema_version, generated_at, stale, installation_id, codex, summary]
+      required:
+        - schema_version
+        - generated_at
+        - stale
+        - installation_id
+        - codex
+        - summary
       properties:
-        schema_version: {type: string}
+        schema_version: {type: string, example: '1.1'}
         generated_at: {type: string, format: date-time}
         stale: {type: boolean}
         installation_id: {type: string}
+        host: {type: object, additionalProperties: true}
+        agent: {type: object, additionalProperties: true}
+        codex_cli: {type: object, additionalProperties: true}
+        app_server: {type: object, additionalProperties: true}
         codex: {type: object, additionalProperties: true}
-        summary: {type: object, additionalProperties: true}
+        summary: {$ref: '#/components/schemas/Summary'}
+        threads:
+          type: array
+          items: {$ref: '#/components/schemas/Thread'}
+        pending_requests:
+          type: array
+          items: {$ref: '#/components/schemas/PendingRequest'}
+        hooks: {type: object, additionalProperties: true}
         usage: {type: object, additionalProperties: true}
         rate_limits: {type: object, additionalProperties: true}
+    Summary:
+      type: object
+      required:
+        - workload_state
+        - state_source
+        - state_confidence
+        - known_threads
+        - active_threads
+        - active_workflows
+        - active_workers
+        - states
+      properties:
+        workload_state: {$ref: '#/components/schemas/WorkloadState'}
+        state_source: {type: string}
+        state_confidence: {type: string}
+        known_threads: {type: integer, minimum: 0}
+        active_threads: {type: integer, minimum: 0}
+        active_workflows: {type: integer, minimum: 0}
+        active_workers: {type: integer, minimum: 0}
+        states:
+          type: object
+          additionalProperties: {type: integer, minimum: 0}
     Thread:
       type: object
-      required: [id, state, state_source, state_confidence, loaded, updated_at]
+      required:
+        - id
+        - state
+        - state_source
+        - state_confidence
+        - loaded
+        - controllable
+        - updated_at
       properties:
         id: {type: string}
+        session_id: {type: string}
         turn_id: {type: string}
+        parent_thread_id: {type: string}
+        root_thread_id: {type: string}
+        thread_role: {type: string, enum: [root, subagent]}
+        agent_nickname: {type: string}
+        agent_role: {type: string}
         name: {type: string}
         preview: {type: string}
         cwd: {type: string}
         source: {type: string}
-        state: {type: string}
+        cli_version: {type: string}
+        state: {$ref: '#/components/schemas/WorkloadState'}
         state_source: {type: string}
         state_confidence: {type: string}
         loaded: {type: boolean}
         updated_at: {type: string, format: date-time}
+        last_turn_status: {type: string}
+        last_hook_event: {type: string}
+        attention_type: {type: string, enum: [approval, input]}
+        request_id: {type: string}
+        controllable: {type: boolean}
+    PendingRequest:
+      type: object
+      required: [id, type, method, thread_id, controllable, created_at]
+      properties:
+        id: {type: string}
+        type: {type: string, enum: [approval, input]}
+        method: {type: string}
+        thread_id: {type: string}
+        turn_id: {type: string}
+        item_id: {type: string}
+        summary: {type: string}
+        cwd: {type: string}
+        questions:
+          type: array
+          items: {type: object, additionalProperties: true}
+        available_decisions:
+          type: array
+          items: {type: string}
+        controllable: {type: boolean}
+        created_at: {type: string, format: date-time}
+    TaskEvent:
+      type: object
+      required:
+        - sequence
+        - event_id
+        - type
+        - installation_id
+        - controllable
+        - occurred_at
+      properties:
+        sequence: {type: integer, minimum: 1}
+        event_id: {type: string}
+        type:
+          type: string
+          enum:
+            - task_started
+            - task_completed
+            - approval_required
+            - input_required
+            - task_failed
+            - task_interrupted
+            - task_resumed
+            - agent_recovered
+        installation_id: {type: string}
+        thread_id: {type: string}
+        turn_id: {type: string}
+        parent_thread_id: {type: string}
+        root_thread_id: {type: string}
+        thread_role: {type: string}
+        agent_nickname: {type: string}
+        task_name: {type: string}
+        from_state: {$ref: '#/components/schemas/WorkloadState'}
+        to_state: {$ref: '#/components/schemas/WorkloadState'}
+        state_source: {type: string}
+        state_confidence: {type: string}
+        request_id: {type: string}
+        controllable: {type: boolean}
+        occurred_at: {type: string, format: date-time}
+    ExactRequestAction:
+      type: object
+      required: [request_id, thread_id, turn_id]
+      properties:
+        request_id: {type: string, minLength: 1}
+        thread_id: {type: string, minLength: 1}
+        turn_id: {type: string, minLength: 1}
+    ActionResult:
+      type: object
+      required: [ok, action, thread_id]
+      properties:
+        ok: {type: boolean, const: true}
+        action: {type: string}
+        request_id: {type: string}
+        thread_id: {type: string}
+        turn_id: {type: string}
+    WorkloadState:
+      type: string
+      enum: [RUNNING, WAITING_APPROVAL, WAITING_INPUT, IDLE, ERROR, UNKNOWN]
     HookEvent:
       type: object
       required: [session_id, hook_event_name]
       properties:
-        session_id: {type: string}
+        session_id: {type: string, minLength: 1}
         turn_id: {type: string}
         cwd: {type: string}
-        hook_event_name: {type: string}
+        hook_event_name: {type: string, minLength: 1}
         tool_name: {type: string}
