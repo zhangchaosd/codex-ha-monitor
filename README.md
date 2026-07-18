@@ -74,7 +74,7 @@ The agent exposes a versioned HTTP API. Every data endpoint requires `Authorizat
 | `GET` | `/api/v1/version` | Schema version, stable installation ID, agent version, Codex CLI version, and app-server details. |
 | `GET` | `/api/v1/status` | Current host, connection, workload summary, Hooks, usage, and rate limits. The thread list is omitted. |
 | `GET` | `/api/v1/threads?limit=100` | Recent Codex threads. `limit` accepts `1`–`200` and defaults to `100`. |
-| `GET` | `/api/v1/usage` | Token usage summary and daily buckets when available. |
+| `GET` | `/api/v1/usage?days=0..365` | Token usage summary and bounded daily buckets when available. The agent retains 90 days by default. |
 | `GET` | `/api/v1/rate-limits` | Primary/secondary rate-limit windows and reset information when available. |
 | `GET` | `/api/v1/events` | Server-Sent Events stream. Each update is an `event: snapshot` carrying a full JSON snapshot in `data:`. |
 | `POST` | `/api/v1/hooks/codex` | Receives a native Codex Hook JSON payload, up to 1 MiB, and returns the derived task state. |
@@ -238,7 +238,7 @@ curl -H 'Authorization: Bearer replace-with-a-long-random-token' http://[::1]:87
 | `GET` | `/api/v1/version` | Schema、安装 ID、代理版本、Codex CLI 版本及 app-server 信息。 |
 | `GET` | `/api/v1/status` | 主机、连接、工作摘要、Hook、用量和限额；不包含任务数组。 |
 | `GET` | `/api/v1/threads?limit=100` | 最近任务，`limit` 范围为 `1`–`200`，默认 `100`。 |
-| `GET` | `/api/v1/usage` | Token 用量摘要和每日用量桶。 |
+| `GET` | `/api/v1/usage?days=0..365` | Token 用量摘要和有上限的每日用量桶；代理默认保留最近 90 天。 |
 | `GET` | `/api/v1/rate-limits` | 主/次限额窗口及重置时间。 |
 | `GET` | `/api/v1/events` | SSE 实时流；事件名为 `snapshot`，`data:` 携带完整 JSON 快照。 |
 | `POST` | `/api/v1/hooks/codex` | 接收最大 1 MiB 的 Codex 原生 Hook JSON，并返回推导出的任务状态。 |

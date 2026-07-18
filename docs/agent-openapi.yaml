@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Codex Monitor Agent API
-  version: 0.3.0
+  version: 0.3.1
   description: Read-only local-network API. All API endpoints require a bearer token.
 servers:
   - url: http://[::1]:8765
@@ -62,7 +62,12 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
   /api/v1/usage:
     get:
-      summary: Codex usage data
+      summary: Codex usage data with bounded daily history
+      parameters:
+        - in: query
+          name: days
+          description: Return at most this many daily buckets. Zero returns no buckets; values above the agent retention limit are capped.
+          schema: {type: integer, minimum: 0, maximum: 365}
       responses:
         '200': {description: Usage payload from Codex App Server, with availability field}
         '401': {$ref: '#/components/responses/Unauthorized'}
