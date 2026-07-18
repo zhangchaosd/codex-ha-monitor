@@ -82,3 +82,31 @@ func TestUsageEndpointRejectsInvalidDays(t *testing.T) {
 		}
 	}
 }
+
+func TestCompactUsageOmitsHistoryBuckets(t *testing.T) {
+	usage := compactUsage(map[string]any{
+		"availability": "available", "summary": map[string]any{"lifetimeTokens": 1},
+		"dailyUsageBuckets": []any{map[string]any{"tokens": 1}},
+	})
+	if _, exists := usage["dailyUsageBuckets"]; exists {
+		t.Fatal("status payload retained daily usage history")
+	}
+	if usage["summary"] == nil {
+		t.Fatal("status payload lost usage summary")
+	}
+}
+
+func TestActionEndpointReportsMissingRequest(t *testing.T) {
+	m := monitor.New(monitor.Config{CodexBinary: "codex-does-not-exist-for-test"})
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/actions/approve",
+		strings.NewReader(`{"request_id":"missing","thread_id":"thread","turn_id":"turn"}`),
+	)
+	request.Header.Set("Authorization", "Bearer secret")
+	recorder := httptest.NewRecorder()
+	New("127.0.0.1:0", m, "secret").Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+}

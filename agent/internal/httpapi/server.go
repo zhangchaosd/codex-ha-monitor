@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -33,6 +34,11 @@ func New(address string, m *monitor.Monitor, token string) *Server {
 	mux.HandleFunc("/api/v1/usage", s.handleUsage)
 	mux.HandleFunc("/api/v1/rate-limits", s.handleRateLimits)
 	mux.HandleFunc("/api/v1/events", s.handleEvents)
+	mux.HandleFunc("/api/v1/requests", s.handleRequests)
+	mux.HandleFunc("/api/v1/actions/approve", s.handleApprove)
+	mux.HandleFunc("/api/v1/actions/reject", s.handleReject)
+	mux.HandleFunc("/api/v1/actions/submit-input", s.handleSubmitInput)
+	mux.HandleFunc("/api/v1/actions/interrupt", s.handleInterrupt)
 	mux.HandleFunc("/api/v1/hooks/codex", s.handleCodexHook)
 	s.http = &http.Server{Addr: address, Handler: cors(authenticate(token, mux)), ReadHeaderTimeout: 5 * time.Second}
 	return s
@@ -94,6 +100,7 @@ func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	snapshot := s.monitor.Snapshot()
 	snapshot.Threads = nil
+	snapshot.Usage = compactUsage(snapshot.Usage)
 	writeJSON(w, snapshot)
 }
 
@@ -150,21 +157,132 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	updates, unsubscribe := s.monitor.Subscribe()
+	afterSequence := uint64(0)
+	if value := r.Header.Get("Last-Event-ID"); value != "" {
+		if parsed, err := strconv.ParseUint(value, 10, 64); err == nil {
+			afterSequence = parsed
+		}
+	}
+	updates, unsubscribe := s.monitor.Subscribe(afterSequence)
 	defer unsubscribe()
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
 	for {
 		select {
 		case <-r.Context().Done():
 			return
-		case snapshot, ok := <-updates:
+		case <-heartbeat.C:
+			_, _ = fmt.Fprint(w, ": keep-alive\n\n")
+			flusher.Flush()
+		case message, ok := <-updates:
 			if !ok {
 				return
 			}
-			data, _ := json.Marshal(snapshot)
-			_, _ = fmt.Fprintf(w, "event: snapshot\ndata: %s\n\n", data)
+			var value any
+			switch message.Event {
+			case "task_activity":
+				value = message.TaskEvent
+				_, _ = fmt.Fprintf(w, "id: %d\n", message.Sequence)
+			default:
+				snapshot := *message.Snapshot
+				snapshot.Usage = compactUsage(snapshot.Usage)
+				value = snapshot
+			}
+			data, _ := json.Marshal(value)
+			_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", message.Event, data)
 			flusher.Flush()
 		}
 	}
+}
+
+func compactUsage(usage map[string]any) map[string]any {
+	if usage == nil {
+		return nil
+	}
+	result := make(map[string]any, len(usage))
+	for key, value := range usage {
+		if key != "dailyUsageBuckets" {
+			result[key] = value
+		}
+	}
+	return result
+}
+
+func (s *Server) handleRequests(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, map[string]any{"requests": s.monitor.PendingRequests()})
+}
+
+type actionRequest struct {
+	RequestID  string              `json:"request_id"`
+	ThreadID   string              `json:"thread_id"`
+	TurnID     string              `json:"turn_id"`
+	ForSession bool                `json:"for_session"`
+	CancelTurn bool                `json:"cancel_turn"`
+	Text       string              `json:"text"`
+	Answers    map[string][]string `json:"answers"`
+}
+
+func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
+	s.handleAction(w, r, func(input actionRequest) (monitor.ActionResult, error) {
+		return s.monitor.Approve(input.RequestID, input.ThreadID, input.TurnID, input.ForSession)
+	})
+}
+
+func (s *Server) handleReject(w http.ResponseWriter, r *http.Request) {
+	s.handleAction(w, r, func(input actionRequest) (monitor.ActionResult, error) {
+		return s.monitor.Reject(input.RequestID, input.ThreadID, input.TurnID, input.CancelTurn)
+	})
+}
+
+func (s *Server) handleSubmitInput(w http.ResponseWriter, r *http.Request) {
+	s.handleAction(w, r, func(input actionRequest) (monitor.ActionResult, error) {
+		answers := input.Answers
+		if len(answers) == 0 && input.Text != "" {
+			for _, pending := range s.monitor.PendingRequests() {
+				if pending.ID == input.RequestID && len(pending.Questions) == 1 {
+					if questionID, ok := pending.Questions[0]["id"].(string); ok && questionID != "" {
+						answers = map[string][]string{questionID: {input.Text}}
+					}
+				}
+			}
+		}
+		return s.monitor.SubmitInput(input.RequestID, input.ThreadID, input.TurnID, answers)
+	})
+}
+
+func (s *Server) handleInterrupt(w http.ResponseWriter, r *http.Request) {
+	s.handleAction(w, r, func(input actionRequest) (monitor.ActionResult, error) {
+		return s.monitor.Interrupt(r.Context(), input.ThreadID, input.TurnID)
+	})
+}
+
+func (s *Server) handleAction(w http.ResponseWriter, r *http.Request, action func(actionRequest) (monitor.ActionResult, error)) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
+	var input actionRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "invalid action JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	result, err := action(input)
+	if err != nil {
+		status := http.StatusBadGateway
+		switch {
+		case errors.Is(err, monitor.ErrRequestNotFound):
+			status = http.StatusNotFound
+		case errors.Is(err, monitor.ErrRequestConflict), errors.Is(err, monitor.ErrNotControllable):
+			status = http.StatusConflict
+		case errors.Is(err, monitor.ErrNoAppServer):
+			status = http.StatusServiceUnavailable
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	writeJSON(w, result)
 }
 
 func (s *Server) handleCodexHook(w http.ResponseWriter, r *http.Request) {
@@ -203,7 +321,7 @@ func cors(next http.Handler) http.Handler {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/hooks/codex" {
+		if r.Method == http.MethodPost && (r.URL.Path == "/api/v1/hooks/codex" || strings.HasPrefix(r.URL.Path, "/api/v1/actions/")) {
 			next.ServeHTTP(w, r)
 			return
 		}

@@ -1,0 +1,52 @@
+blueprint:
+  name: Codex Monitor - notify when attention is required
+  description: >-
+    Creates a persistent Home Assistant notification when a Codex task asks
+    for approval or user input. This blueprint never approves automatically.
+  domain: automation
+  homeassistant:
+    min_version: 2025.2.0
+  input:
+    task_event:
+      name: Codex task activity event
+      description: Select the Task activity event entity from a Codex Monitor device.
+      selector:
+        entity:
+          integration: codex_monitor
+          domain: event
+    notification_title:
+      name: Notification title
+      default: Codex needs attention
+      selector:
+        text:
+
+triggers:
+  - trigger: state
+    entity_id: !input task_event
+
+conditions:
+  - condition: template
+    value_template: >-
+      {{ trigger.to_state is not none and
+         trigger.to_state.attributes.get('event_type') in
+         ['approval_required', 'input_required'] }}
+
+actions:
+  - action: persistent_notification.create
+    data:
+      title: !input notification_title
+      notification_id: >-
+        codex_monitor_{{ trigger.to_state.attributes.get('request_id',
+        trigger.to_state.attributes.get('thread_id', 'attention')) }}
+      message: >-
+        {{ trigger.to_state.attributes.get('task_name', 'A Codex task') }}
+        is waiting for
+        {{ 'approval' if trigger.to_state.attributes.get('event_type') ==
+        'approval_required' else 'input' }}.
+        Thread: {{ trigger.to_state.attributes.get('thread_id', 'unknown') }}.
+        {% if not trigger.to_state.attributes.get('controllable', false) %}
+        This request is visible but cannot be controlled through this agent connection.
+        {% endif %}
+
+mode: queued
+max: 10

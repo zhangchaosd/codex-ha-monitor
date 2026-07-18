@@ -62,6 +62,7 @@ func (m *Monitor) RecordHook(event HookEvent) (HookResult, error) {
 	}
 
 	m.mu.Lock()
+	m.prepareLiveEventLocked()
 	m.snapshot.Hooks.ReceivedEvents++
 	m.snapshot.Hooks.LastEventAt = &now
 	if recorded {

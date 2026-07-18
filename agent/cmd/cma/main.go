@@ -12,13 +12,15 @@ import (
 	"syscall"
 	"time"
 
+	"codex-monitor-agent/internal/discovery"
 	"codex-monitor-agent/internal/hookrelay"
 	"codex-monitor-agent/internal/httpapi"
 	"codex-monitor-agent/internal/identity"
+	"codex-monitor-agent/internal/model"
 	"codex-monitor-agent/internal/monitor"
 )
 
-const version = "0.3.1"
+const version = "0.4.0"
 
 func main() {
 	if runHookCommand(os.Args[1:]) {
@@ -41,6 +43,7 @@ func main() {
 		hookIdleTTL      = flag.Duration("hook-idle-ttl", time.Minute, "How long an idle hook overrides filesystem activity")
 		hookAttentionTTL = flag.Duration("hook-attention-ttl", 5*time.Minute, "How long approval/input hooks remain active")
 		maxThreads       = flag.Int("max-threads", 100, "Maximum recent threads")
+		mdns             = flag.Bool("mdns", true, "Advertise the agent with mDNS/Zeroconf")
 		showVersion      = flag.Bool("version", false, "Print CMA version")
 	)
 	flag.Parse()
@@ -87,6 +90,11 @@ func main() {
 	})
 	go m.Run(ctx)
 	address := net.JoinHostPort(*bind, strconv.Itoa(*port))
+	if *mdns {
+		if err := discovery.Advertise(ctx, *port, installationID, version, model.SchemaVersion); err != nil {
+			log.Printf("mDNS discovery unavailable: %v", err)
+		}
+	}
 	log.Printf("CMA %s listening on http://%s", version, address)
 	if err := httpapi.New(address, m, *token).ListenAndServe(ctx); err != nil {
 		log.Fatalf("HTTP server: %v", err)

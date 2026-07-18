@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Connect to a Codex Monitor Agent",
-        "description": "Enter the URL of the read-only agent running on the Codex computer.",
+        "description": "Enter the URL of the agent running on the Codex computer.",
         "data": {
           "url": "Agent URL",
           "token": "API token",
@@ -23,11 +23,22 @@
           "url": "Agent URL",
           "token": "API token"
         }
+      },
+      "reauth_confirm": {
+        "title": "Update Codex Monitor authentication",
+        "description": "The configured API token was rejected. Enter the current agent token.",
+        "data": {"token": "API token"}
+      },
+      "zeroconf_confirm": {
+        "title": "Connect to discovered Codex Monitor",
+        "description": "Agent discovered at {url}. Enter its API token to finish setup.",
+        "data": {"token": "API token", "name": "Display name (optional)"}
       }
     },
     "error": {
       "cannot_connect": "Failed to connect to the agent.",
       "invalid_response": "The server did not return a supported Codex Monitor response.",
+      "invalid_auth": "The agent rejected the API token.",
       "invalid_url": "Enter a valid HTTP or HTTPS URL without a query or fragment.",
       "unknown": "Unexpected error. Check the Home Assistant logs."
     },
@@ -35,13 +46,16 @@
       "already_configured": "This agent is already configured.",
       "unique_id_mismatch": "The new URL belongs to a different agent installation.",
       "reconfigure_successful": "The agent URL was updated."
+      ,"reauth_successful": "The API token was updated."
+      ,"invalid_discovery": "The discovery record did not contain a valid installation identity."
+      ,"discovery_changed": "The discovered agent identity changed during setup."
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "Codex Monitor options",
-        "description": "Choose how often Home Assistant reads the local agent.",
+        "description": "Choose the fallback reconciliation interval. Live changes use the event stream.",
         "data": {
           "scan_interval": "Polling interval (seconds)"
         },
@@ -68,8 +82,13 @@
         "name": "Current task"
       },
       "active_threads": {
-        "name": "Active tasks"
+        "name": "Active workflows"
       },
+      "active_workers": {"name": "Active workers"},
+      "running_tasks": {"name": "Running tasks"},
+      "pending_approvals": {"name": "Pending approvals"},
+      "pending_inputs": {"name": "Pending inputs"},
+      "failed_tasks": {"name": "Failed tasks"},
       "connection_state": {
         "name": "Connection state",
         "state": {
@@ -77,6 +96,7 @@
           "connecting": "Connecting",
           "disconnected": "Disconnected",
           "error": "Error",
+          "recovering": "Recovering",
           "unknown": "Unknown"
         }
       },
@@ -121,9 +141,54 @@
       "attention_required": {
         "name": "Attention required"
       },
+      "task_problem": {"name": "Task problem"},
       "stale": {
         "name": "Stale data"
       }
+    },
+    "event": {"task_activity": {"name": "Task activity"}}
+  },
+  "issues": {
+    "incompatible_agent": {
+      "title": "Codex Monitor agent is incompatible",
+      "description": "Home Assistant could not understand the agent response: {error}. Update the agent and reload the integration."
+    }
+  },
+  "exceptions": {
+    "device_not_loaded": {"message": "The selected Codex Monitor device is not loaded."},
+    "action_failed": {"message": "The Codex action failed: {error}"}
+  },
+  "services": {
+    "approve_request": {
+      "name": "Approve request", "description": "Approve one exact pending Codex request.",
+      "fields": {
+        "device_id": {"name": "Device", "description": "Codex Monitor host."},
+        "request_id": {"name": "Request ID", "description": "Pending request identifier from the task event."},
+        "thread_id": {"name": "Thread ID", "description": "Codex thread identifier."},
+        "turn_id": {"name": "Turn ID", "description": "Codex turn identifier."},
+        "for_session": {"name": "Approve for session", "description": "Also approve matching requests for this app-server session when supported."}
+      }
+    },
+    "reject_request": {
+      "name": "Reject request", "description": "Reject one exact pending Codex request.",
+      "fields": {
+        "device_id": {"name": "Device"}, "request_id": {"name": "Request ID"},
+        "thread_id": {"name": "Thread ID"}, "turn_id": {"name": "Turn ID"},
+        "cancel_turn": {"name": "Cancel turn", "description": "Interrupt the turn after rejecting the request."}
+      }
+    },
+    "submit_input": {
+      "name": "Submit input", "description": "Answer one exact Codex user-input request.",
+      "fields": {
+        "device_id": {"name": "Device"}, "request_id": {"name": "Request ID"},
+        "thread_id": {"name": "Thread ID"}, "turn_id": {"name": "Turn ID"},
+        "text": {"name": "Text", "description": "Text answer for a single-question request."},
+        "answers": {"name": "Structured answers", "description": "Question IDs mapped to answer arrays."}
+      }
+    },
+    "interrupt_turn": {
+      "name": "Interrupt turn", "description": "Interrupt one exact running Codex turn.",
+      "fields": {"device_id": {"name": "Device"}, "thread_id": {"name": "Thread ID"}, "turn_id": {"name": "Turn ID"}}
     }
   }
 }

@@ -48,10 +48,10 @@ type Client struct {
 	nextID    atomic.Int64
 	done      chan error
 	closeOnce sync.Once
-	onMessage func(method string, params json.RawMessage, serverRequest bool)
+	onMessage func(client *Client, id json.RawMessage, method string, params json.RawMessage)
 }
 
-func ConnectStdio(ctx context.Context, binary, clientVersion string, onMessage func(string, json.RawMessage, bool)) (*Client, InitializeResult, error) {
+func ConnectStdio(ctx context.Context, binary, clientVersion string, onMessage func(*Client, json.RawMessage, string, json.RawMessage)) (*Client, InitializeResult, error) {
 	cmd := exec.CommandContext(ctx, binary, "app-server", "--stdio")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -77,6 +77,9 @@ func ConnectStdio(ctx context.Context, binary, clientVersion string, onMessage f
 	if err := client.Request(requestCtx, "initialize", map[string]any{
 		"clientInfo": map[string]any{
 			"name": "codex_monitor_agent", "title": "Codex Monitor Agent", "version": clientVersion,
+		},
+		"capabilities": map[string]any{
+			"experimentalApi": true, "mcpServerOpenaiFormElicitation": true,
 		},
 	}, &initResult); err != nil {
 		_ = client.Close()
@@ -124,6 +127,18 @@ func (c *Client) Notify(method string, params any) error {
 	return c.write(map[string]any{"method": method, "params": params})
 }
 
+// Respond resolves a request initiated by app-server. The id must be copied
+// verbatim from the incoming request so both numeric and string ids work.
+func (c *Client) Respond(id json.RawMessage, result any) error {
+	if len(id) == 0 {
+		return fmt.Errorf("app-server response id is empty")
+	}
+	return c.write(struct {
+		ID     json.RawMessage `json:"id"`
+		Result any             `json:"result"`
+	}{ID: id, Result: result})
+}
+
 func (c *Client) write(message any) error {
 	data, err := json.Marshal(message)
 	if err != nil {
@@ -158,7 +173,7 @@ func (c *Client) readLoop() {
 			continue
 		}
 		if message.Method != "" && c.onMessage != nil {
-			c.onMessage(message.Method, message.Params, len(message.ID) > 0)
+			c.onMessage(c, message.ID, message.Method, message.Params)
 		}
 	}
 	err := scanner.Err()

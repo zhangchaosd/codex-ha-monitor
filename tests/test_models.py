@@ -32,6 +32,8 @@ def _status():
             "state_confidence": "observed",
             "known_threads": 12,
             "active_threads": 2,
+            "active_workflows": 1,
+            "active_workers": 2,
             "states": {"running": 1, "waiting_approval": 1},
         },
         "hooks": {
@@ -83,7 +85,8 @@ def test_snapshot_extracts_entity_values():
     assert snapshot.installation_id == "test-installation"
     assert snapshot.workload_state == "waiting_approval"
     assert snapshot.connection_state == "connected"
-    assert snapshot.active_threads == 2
+    assert snapshot.active_threads == 1
+    assert snapshot.active_workers == 2
     assert snapshot.known_threads == 12
     assert snapshot.current_thread_name == "Approve command"
     assert snapshot.agent_version == "0.2.0"
@@ -93,6 +96,33 @@ def test_snapshot_extracts_entity_values():
     assert snapshot.received_hook_events == 7
     assert snapshot.rate_limit_window("primary")["usedPercent"] == 9
     assert snapshot.is_stale is False
+    assert snapshot.has_running_tasks is True
+    assert snapshot.attention_required is True
+    assert snapshot.has_task_problem is False
+
+
+def test_independent_binary_facts_do_not_depend_on_summary_priority():
+    status = _status()
+    status["summary"]["workload_state"] = "ERROR"
+    status["summary"]["states"] = {
+        "running": 1,
+        "waiting_approval": 1,
+        "waiting_input": 0,
+        "error": 1,
+    }
+    snapshot = MonitorSnapshot.from_payloads(status, _threads())
+
+    assert snapshot.workload_state == "error"
+    assert snapshot.has_running_tasks is True
+    assert snapshot.attention_required is True
+    assert snapshot.has_task_problem is True
+
+
+def test_unsupported_schema_is_rejected():
+    status = _status()
+    status["schema_version"] = "2.0"
+    with pytest.raises(InvalidSnapshotError, match="unsupported agent schema"):
+        MonitorSnapshot.from_payloads(status, _threads())
 
 
 def test_fingerprint_ignores_poll_only_timestamps():

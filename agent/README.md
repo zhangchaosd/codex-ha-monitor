@@ -1,79 +1,126 @@
 # Codex Monitor Agent
 
-一个使用 Bearer Token 认证的局域网只读 Codex 状态代理。当前 MVP 使用 Go 标准库实现，支持：
+[English](#english) | [简体中文](#简体中文)
 
-- 自动启动 stdio Codex App Server，并读取线程、Token 和额度。
-- 接收 Codex 原生生命周期 Hooks，按 `session_id` / `turn_id` 提供低延迟任务和审批状态。
-- 扫描本机 `CODEX_HOME` 会话元数据，兼容独立运行的 Desktop/IDE 客户端。
-- `/api/v1/version`、`/status`、`/threads`、`/usage`、`/rate-limits`。
-- `POST /api/v1/hooks/codex` 原生 Hook 接口。
-- `/api/v1/events` Server-Sent Events。
-- 内置只读状态页面。
+## English
 
-状态数据源优先级为：有效 Hook 事件 → App Server 状态 → 文件系统推断。Hook 只覆盖相同 `session_id` 的任务，不会把多个 Codex 任务合并成一个全局开关。
+Codex Monitor Agent (CMA) is a small Go service that exposes per-thread Codex activity to local-network clients. It combines three sources, in priority order:
 
-## 开发运行
+1. Recent Codex Hook events for low-latency state.
+2. The agent-owned Codex App Server for exact loaded-thread and account data.
+3. Local `CODEX_HOME` session files for threads owned by Desktop, CLI, or IDE processes.
 
-```bash
-go run ./cmd/cma --token 'replace-with-a-long-random-token' 8765
-```
+It keeps different `session_id`/thread IDs separate, preserves subagent parent/root relationships, and reports both active root workflows and active workers.
 
-然后访问：
-
-```text
-http://[::1]:8765/
-http://[::1]:8765/api/v1/version
-http://[::1]:8765/api/v1/status
-http://[::1]:8765/api/v1/threads
-```
-
-默认监听 IPv6 通配地址 `[::]:8765`。所有 API 请求必须带 `Authorization: Bearer <token>`，例如：
+### Run
 
 ```bash
-curl -H 'Authorization: Bearer replace-with-a-long-random-token' http://[::1]:8765/api/v1/usage
-```
-
-## 启用 Codex Hooks
-
-构建代理后生成推荐配置：
-
-```bash
-./bin/codex-monitor-agent print-hook-config --token 'replace-with-a-long-random-token'
-```
-
-将输出的 `hooks` 对象合并到现有 `~/.codex/hooks.json`，不要覆盖已有 Hooks。然后在 Codex CLI 中运行 `/hooks`，检查并信任新命令。
-
-配置里的每个 command hook 会执行：
-
-```text
-codex-monitor-agent hook-forward --token 'replace-with-a-long-random-token' http://127.0.0.1:8765/api/v1/hooks/codex
-```
-
-`hook-forward` 将 Codex 写到 stdin 的 JSON 原样转发，因此代理能够保留 `session_id`、`turn_id`、`cwd` 和工具名称。转发采用短超时和 best-effort 语义；代理暂时不可用时不会阻塞 Codex。
-
-默认状态映射：
-
-| 事件 | 状态 | TTL |
-|---|---|---:|
-| `PermissionRequest` | `WAITING_APPROVAL` | 5 分钟 |
-| `Elicitation`（兼容接收，当前生成配置不主动注册） | `WAITING_INPUT` | 5 分钟 |
-| `UserPromptSubmit`、工具和压缩生命周期事件 | `RUNNING` | 10 分钟 |
-| `Stop`、`SessionStart`、`SessionEnd` | `IDLE` | 1 分钟 |
-
-TTL 到期后自动恢复 App Server 或文件系统状态。可用 `--hook-running-ttl`、`--hook-idle-ttl` 和 `--hook-attention-ttl` 调整。
-
-当 `account/usage/read` 或 `account/rateLimits/read` 连续超时/失败时，代理会自动重启它自己启动的 Codex App Server。默认每个请求超时 10 秒、连续失败 2 次后恢复；可用 `--app-server-request-timeout` 和 `--app-server-failure-threshold` 调整。`/api/v1/status` 的 `codex.consecutive_failures` 与 `codex.last_recovery_at` 可用于观察恢复状态。
-
-为避免账户历史增长导致响应无限变大，代理默认只保留最近 90 个 `dailyUsageBuckets`。用 `--usage-history-days 0..365` 调整（`0` 不返回每日桶）；`GET /api/v1/usage?days=N` 可在该上限内进一步缩短返回的每日桶。
-
-> `print-hook-config` 只打印配置，不修改用户的 Codex 文件。Hook 必须经过 Codex 的 `/hooks` 信任流程才会运行。
-
-## 构建与测试
-
-```bash
-go test ./...
-go vet ./...
 go build -o ./bin/codex-monitor-agent ./cmd/cma
+./bin/codex-monitor-agent --token 'replace-with-a-long-random-token'
 ```
 
-当前 M1.1 实现 `auto`、`stdio`、按会话 Hook 关联和文件系统回退；WebSocket、Unix socket、mDNS 和服务文件属于下一里程碑。
+Useful flags:
+
+```text
+--bind ::                         HTTP bind address
+--port 8765                      HTTP port
+--token TOKEN                    required API bearer token
+--codex auto                     auto or stdio App Server connection
+--codex-bin codex                Codex executable
+--codex-home PATH                CODEX_HOME override
+--poll-interval 10s              App Server reconciliation interval
+--filesystem-active-window 60s   filesystem activity inference window
+--stale-after 30s                stale snapshot threshold
+--max-threads 100                retained recent threads
+--usage-history-days 90          retained usage buckets, 0..365
+--mdns=true                      advertise _codex-monitor._tcp.local.
+```
+
+Verify the process:
+
+```bash
+curl -H 'Authorization: Bearer replace-with-a-long-random-token' \
+  http://[::1]:8765/healthz
+curl -H 'Authorization: Bearer replace-with-a-long-random-token' \
+  http://[::1]:8765/api/v1/status
+```
+
+### API summary
+
+CMA exposes schema `1.1` JSON over HTTP and live Server-Sent Events. The primary reads are `/api/v1/version`, `/status`, `/threads`, `/requests`, `/usage`, and `/rate-limits`. `/api/v1/events` sends complete `snapshot` messages and sequenced `task_activity` messages; reconnecting clients can supply `Last-Event-ID` for replay. `/api/v1/hooks/codex` receives native Hook payloads.
+
+Control routes are `/api/v1/actions/approve`, `/reject`, `/submit-input`, and `/interrupt`. They require exact request/thread/turn IDs and return `404` for an expired request, `409` for mismatched or non-controllable data, and `503` if an App Server is unavailable.
+
+See [the integration contract](../docs/agent-integration-contract.md) and [OpenAPI](../docs/agent-openapi.yaml) for complete payloads.
+
+### Control boundary
+
+CMA owns one App Server child process. Only requests delivered by this process can be answered by CMA. A separate Codex Desktop process normally owns a different App Server connection; its saved threads are observable through the filesystem but its live approval channel is not shared. Check `controllable` before showing an action. This restriction comes from the connection ownership model, not from missing thread granularity.
+
+### Enable Codex Hooks
+
+Generate the recommended configuration:
+
+```bash
+./bin/codex-monitor-agent print-hook-config \
+  --token 'replace-with-a-long-random-token'
+```
+
+Merge the printed `hooks` object into the existing `~/.codex/hooks.json`, then use `/hooks` in Codex CLI to inspect and trust it. Do not overwrite existing Hooks.
+
+Each configured hook invokes:
+
+```text
+codex-monitor-agent hook-forward --token TOKEN http://127.0.0.1:8765/api/v1/hooks/codex
+```
+
+`hook-forward` passes Codex's stdin JSON through unchanged, preserving `session_id`, `turn_id`, `cwd`, and tool metadata. It is best-effort with a short timeout so a stopped monitor does not hold up Codex.
+
+Default mapping:
+
+| Hook | State | Authority TTL |
+|---|---|---:|
+| `PermissionRequest` | `WAITING_APPROVAL` | 5 minutes |
+| `Elicitation` | `WAITING_INPUT` | 5 minutes |
+| `UserPromptSubmit`, tool/compaction lifecycle | `RUNNING` | 10 minutes |
+| `Stop`, `SessionStart`, `SessionEnd` | `IDLE` | 1 minute |
+
+After the TTL, App Server or filesystem state becomes authoritative again. Adjust the TTLs with `--hook-running-ttl`, `--hook-idle-ttl`, and `--hook-attention-ttl`.
+
+Repeated account-read failures cause CMA to restart only the App Server child it owns. `codex.consecutive_failures` and `codex.last_recovery_at` expose this recovery behavior.
+
+### Build and test
+
+```bash
+go test -race ./...
+go vet ./...
+go build ./cmd/cma
+```
+
+The release workflow builds `linux`, `darwin`, and `windows` for `amd64` and `arm64` with `CGO_ENABLED=0`.
+
+## 简体中文
+
+Codex Monitor Agent（CMA）是一个局域网 Go 服务。它按优先级组合 Codex Hook、代理自己启动的 App Server，以及本机 `CODEX_HOME` 会话文件，按 thread/session 分别输出状态，并保留子代理的父级与根工作流关系。
+
+构建和启动：
+
+```bash
+go build -o ./bin/codex-monitor-agent ./cmd/cma
+./bin/codex-monitor-agent --token 'replace-with-a-long-random-token'
+```
+
+默认监听 `[::]:8765`，并通过 `_codex-monitor._tcp.local.` 发布 mDNS 服务。Schema `1.1` 提供版本、状态、会话、待处理请求、用量、限额接口；SSE 同时推送完整快照与可重放任务事件；控制接口支持批准、拒绝、提交输入和精确中断。
+
+控制有明确边界：只有通过代理自有 App Server 到达的请求才可操作。Codex Desktop 通常使用另一条 App Server 连接，因此其多会话可以通过文件系统被监控，但 Desktop 持有的实时批准请求不能由代理代答。客户端必须检查 `controllable`。
+
+生成 Hook 配置：
+
+```bash
+./bin/codex-monitor-agent print-hook-config \
+  --token 'replace-with-a-long-random-token'
+```
+
+把输出合并到现有 `~/.codex/hooks.json`，再通过 Codex CLI 的 `/hooks` 检查并信任。`hook-forward` 使用短超时和 best-effort 语义，不会因为代理临时离线而阻塞 Codex。
+
+完整接口见 [对接契约](../docs/agent-integration-contract.md) 和 [OpenAPI](../docs/agent-openapi.yaml)。

@@ -56,6 +56,42 @@ SENSOR_DESCRIPTIONS = (
         state_class=SensorStateClass.MEASUREMENT,
     ),
     SensorEntityDescription(
+        key="active_workers",
+        translation_key="active_workers",
+        icon="mdi:account-group-outline",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+    ),
+    SensorEntityDescription(
+        key="running_tasks",
+        translation_key="running_tasks",
+        icon="mdi:progress-wrench",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_registry_enabled_default=False,
+    ),
+    SensorEntityDescription(
+        key="pending_approvals",
+        translation_key="pending_approvals",
+        icon="mdi:account-check-outline",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_registry_enabled_default=False,
+    ),
+    SensorEntityDescription(
+        key="pending_inputs",
+        translation_key="pending_inputs",
+        icon="mdi:form-textbox",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_registry_enabled_default=False,
+    ),
+    SensorEntityDescription(
+        key="failed_tasks",
+        translation_key="failed_tasks",
+        icon="mdi:alert-circle-outline",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_registry_enabled_default=False,
+    ),
+    SensorEntityDescription(
         key="connection_state",
         translation_key="connection_state",
         device_class=SensorDeviceClass.ENUM,
@@ -142,6 +178,11 @@ VALUE_FUNCTIONS: dict[str, Callable[[MonitorSnapshot], Any]] = {
     "workload_state": lambda data: data.workload_state,
     "current_task": lambda data: data.current_thread_name,
     "active_threads": lambda data: data.active_threads,
+    "active_workers": lambda data: data.active_workers,
+    "running_tasks": lambda data: data.state_count("running"),
+    "pending_approvals": lambda data: data.state_count("waiting_approval"),
+    "pending_inputs": lambda data: data.state_count("waiting_input"),
+    "failed_tasks": lambda data: data.state_count("error"),
     "connection_state": lambda data: data.connection_state,
     "known_threads": lambda data: data.known_threads,
     "codex_version": lambda data: data.codex_version,
@@ -172,6 +213,35 @@ class CodexMonitorSensor(CodexMonitorEntity, SensorEntity):
     """A sensor backed by a value in the coordinator snapshot."""
 
     entity_description: SensorEntityDescription
+    _unrecorded_attributes = frozenset(
+        {
+            "active_sessions",
+            "agent_nickname",
+            "binary",
+            "controllable",
+            "cwd",
+            "go_version",
+            "last_error",
+            "last_event_at",
+            "last_hook_event",
+            "last_hook_event_at",
+            "loaded",
+            "parent_thread_id",
+            "raw",
+            "request_id",
+            "resets_at",
+            "root_thread_id",
+            "source",
+            "state_confidence",
+            "state_source",
+            "states",
+            "thread_id",
+            "thread_role",
+            "turn_id",
+            "visibility",
+            "window_duration_minutes",
+        }
+    )
 
     def __init__(
         self,
@@ -211,6 +281,10 @@ class CodexMonitorSensor(CodexMonitorEntity, SensorEntity):
             return {
                 "thread_id": thread.get("id"),
                 "turn_id": thread.get("turn_id"),
+                "parent_thread_id": thread.get("parent_thread_id"),
+                "root_thread_id": thread.get("root_thread_id"),
+                "thread_role": thread.get("thread_role"),
+                "agent_nickname": thread.get("agent_nickname"),
                 "state": str(thread.get("state", "unknown")).lower(),
                 "state_source": thread.get("state_source"),
                 "state_confidence": thread.get("state_confidence"),
@@ -218,6 +292,8 @@ class CodexMonitorSensor(CodexMonitorEntity, SensorEntity):
                 "cwd": thread.get("cwd"),
                 "loaded": thread.get("loaded"),
                 "last_hook_event": thread.get("last_hook_event"),
+                "request_id": thread.get("request_id"),
+                "controllable": thread.get("controllable"),
             }
 
         if key == "connection_state":

@@ -38,16 +38,25 @@ type Config struct {
 }
 
 type Monitor struct {
-	cfg          Config
-	startedAt    time.Time
-	mu           sync.RWMutex
-	snapshot     model.Snapshot
-	appThreads   []model.Thread
-	fsThreads    []model.Thread
-	usage        map[string]any
-	rateLimits   map[string]any
-	hookSessions map[string]hookObservation
-	subs         map[chan model.Snapshot]struct{}
+	cfg             Config
+	startedAt       time.Time
+	mu              sync.RWMutex
+	snapshot        model.Snapshot
+	appThreads      []model.Thread
+	fsThreads       []model.Thread
+	usage           map[string]any
+	rateLimits      map[string]any
+	hookSessions    map[string]hookObservation
+	subs            map[chan StreamMessage]struct{}
+	lastThreads     map[string]model.Thread
+	eventsReady     bool
+	eventSequence   uint64
+	eventHistory    []model.TaskEvent
+	streamSignature [32]byte
+	streamReady     bool
+	pendingRequests map[string]*pendingControl
+	requestSequence uint64
+	client          appServerController
 }
 
 func New(cfg Config) *Monitor {
@@ -55,8 +64,9 @@ func New(cfg Config) *Monitor {
 	cli := detectCodexVersion(cfg.CodexBinary)
 	now := time.Now().UTC()
 	return &Monitor{
-		cfg: cfg, startedAt: now, subs: map[chan model.Snapshot]struct{}{},
+		cfg: cfg, startedAt: now, subs: map[chan StreamMessage]struct{}{},
 		hookSessions: map[string]hookObservation{},
+		lastThreads:  map[string]model.Thread{}, pendingRequests: map[string]*pendingControl{},
 		snapshot: model.Snapshot{
 			SchemaVersion: model.SchemaVersion, GeneratedAt: now,
 			InstallationID: cfg.InstallationID,
@@ -80,13 +90,19 @@ func (m *Monitor) Snapshot() model.Snapshot {
 	return m.snapshot
 }
 
-func (m *Monitor) Subscribe() (<-chan model.Snapshot, func()) {
-	ch := make(chan model.Snapshot, 4)
+func (m *Monitor) Subscribe(afterSequence uint64) (<-chan StreamMessage, func()) {
+	ch := make(chan StreamMessage, 300)
 	m.mu.Lock()
 	m.subs[ch] = struct{}{}
 	current := m.snapshot
+	for _, event := range m.eventHistory {
+		if event.Sequence > afterSequence {
+			eventCopy := event
+			ch <- StreamMessage{Event: "task_activity", Sequence: event.Sequence, TaskEvent: &eventCopy}
+		}
+	}
 	m.mu.Unlock()
-	ch <- current
+	ch <- StreamMessage{Event: "snapshot", Snapshot: &current}
 	return ch, func() {
 		m.mu.Lock()
 		delete(m.subs, ch)
@@ -160,10 +176,15 @@ func (m *Monitor) runAppServer(ctx context.Context) {
 		}
 		backoff = time.Second
 		m.mu.Lock()
+		previousConnection := m.snapshot.Codex.ConnectionState
+		m.client = client
 		m.snapshot.AppServer = model.AppServerInfo{UserAgent: initResult.UserAgent, CodexHome: initResult.CodexHome}
 		m.snapshot.Codex.ConnectionState = "connected"
 		m.snapshot.Codex.Visibility = "agent_owned_with_filesystem_fallback"
 		m.snapshot.Codex.LastError = ""
+		if previousConnection == "recovering" || previousConnection == "disconnected" || previousConnection == "error" {
+			m.emitTaskEventLocked(model.TaskEvent{Type: model.EventAgentRecovered, ToState: "connected", OccurredAt: time.Now().UTC()})
+		}
 		m.rebuildLocked(time.Now().UTC())
 		m.mu.Unlock()
 
@@ -175,6 +196,7 @@ func (m *Monitor) runAppServer(ctx context.Context) {
 		if err := m.refreshAppServer(ctx, client); err != nil {
 			ticker.Stop()
 			_ = client.Close()
+			m.clearClient(client)
 			m.setConnection("disconnected", err.Error())
 			if !waitContext(ctx, backoff) {
 				return
@@ -188,16 +210,19 @@ func (m *Monitor) runAppServer(ctx context.Context) {
 			case <-ctx.Done():
 				ticker.Stop()
 				_ = client.Close()
+				m.clearClient(client)
 				return
 			case err := <-client.Done():
 				ticker.Stop()
 				_ = client.Close()
+				m.clearClient(client)
 				m.setConnection("disconnected", err.Error())
 				connected = false
 			case <-ticker.C:
 				if err := m.refreshAppServer(ctx, client); err != nil {
 					ticker.Stop()
 					_ = client.Close()
+					m.clearClient(client)
 					m.setConnection("disconnected", err.Error())
 					connected = false
 				}
@@ -213,14 +238,18 @@ func (m *Monitor) runAppServer(ctx context.Context) {
 func (m *Monitor) refreshAppServer(parent context.Context, client *appserver.Client) error {
 	var threadsResponse struct {
 		Data []struct {
-			ID         string          `json:"id"`
-			Name       string          `json:"name"`
-			Preview    string          `json:"preview"`
-			CWD        string          `json:"cwd"`
-			Source     any             `json:"source"`
-			CLIVersion string          `json:"cliVersion"`
-			UpdatedAt  int64           `json:"updatedAt"`
-			Status     json.RawMessage `json:"status"`
+			ID             string          `json:"id"`
+			SessionID      string          `json:"sessionId"`
+			ParentThreadID string          `json:"parentThreadId"`
+			AgentNickname  string          `json:"agentNickname"`
+			AgentRole      string          `json:"agentRole"`
+			Name           string          `json:"name"`
+			Preview        string          `json:"preview"`
+			CWD            string          `json:"cwd"`
+			Source         any             `json:"source"`
+			CLIVersion     string          `json:"cliVersion"`
+			UpdatedAt      int64           `json:"updatedAt"`
+			Status         json.RawMessage `json:"status"`
 		} `json:"data"`
 	}
 	ctx, cancel := m.appServerRequestContext(parent)
@@ -245,10 +274,12 @@ func (m *Monitor) refreshAppServer(parent context.Context, client *appserver.Cli
 	for _, item := range threadsResponse.Data {
 		state, confidence := mapAppServerState(item.Status)
 		threads = append(threads, model.Thread{
-			ID: item.ID, Name: item.Name, Preview: item.Preview, CWD: item.CWD,
+			ID: item.ID, SessionID: item.SessionID, ParentThreadID: item.ParentThreadID,
+			AgentNickname: item.AgentNickname, AgentRole: item.AgentRole,
+			Name: item.Name, Preview: item.Preview, CWD: item.CWD,
 			Source: stringifySource(item.Source), CLIVersion: item.CLIVersion,
 			State: state, StateSource: "app_server_reconcile", StateConfidence: confidence,
-			Loaded: loaded[item.ID], UpdatedAt: time.Unix(item.UpdatedAt, 0).UTC(),
+			Loaded: loaded[item.ID], Controllable: loaded[item.ID], UpdatedAt: time.Unix(item.UpdatedAt, 0).UTC(),
 		})
 	}
 	var usage map[string]any
@@ -377,7 +408,11 @@ func (m *Monitor) appServerFailureCount() int {
 	return m.snapshot.Codex.ConsecutiveFailures
 }
 
-func (m *Monitor) handleAppServerMessage(method string, params json.RawMessage, serverRequest bool) {
+func (m *Monitor) handleAppServerMessage(client *appserver.Client, requestID json.RawMessage, method string, params json.RawMessage) {
+	if len(requestID) > 0 {
+		m.recordServerRequest(client, requestID, method, params)
+		return
+	}
 	if method == "thread/status/changed" {
 		var event struct {
 			ThreadID string          `json:"threadId"`
@@ -386,6 +421,7 @@ func (m *Monitor) handleAppServerMessage(method string, params json.RawMessage, 
 		if json.Unmarshal(params, &event) == nil {
 			state, confidence := mapAppServerState(event.Status)
 			m.mu.Lock()
+			m.prepareLiveEventLocked()
 			for i := range m.appThreads {
 				if m.appThreads[i].ID == event.ThreadID {
 					m.appThreads[i].State = state
@@ -398,12 +434,69 @@ func (m *Monitor) handleAppServerMessage(method string, params json.RawMessage, 
 			m.mu.Unlock()
 		}
 	}
-	_ = serverRequest
+	if method == "turn/started" || method == "turn/completed" {
+		var event struct {
+			ThreadID string `json:"threadId"`
+			Turn     struct {
+				ID     string `json:"id"`
+				Status string `json:"status"`
+			} `json:"turn"`
+		}
+		if json.Unmarshal(params, &event) == nil && event.ThreadID != "" {
+			now := time.Now().UTC()
+			m.mu.Lock()
+			m.prepareLiveEventLocked()
+			index := -1
+			for i := range m.appThreads {
+				if m.appThreads[i].ID == event.ThreadID {
+					index = i
+					break
+				}
+			}
+			if index < 0 {
+				m.appThreads = append(m.appThreads, model.Thread{ID: event.ThreadID})
+				index = len(m.appThreads) - 1
+			}
+			thread := &m.appThreads[index]
+			thread.TurnID = event.Turn.ID
+			thread.LastTurnStatus = event.Turn.Status
+			thread.StateSource = "app_server_event"
+			thread.StateConfidence = "exact"
+			thread.UpdatedAt = now
+			if method == "turn/started" || event.Turn.Status == "inProgress" {
+				thread.State = model.StateRunning
+			} else if event.Turn.Status == "failed" {
+				thread.State = model.StateError
+			} else {
+				thread.State = model.StateIdle
+			}
+			m.rebuildLocked(now)
+			m.mu.Unlock()
+		}
+	}
+	if method == "serverRequest/resolved" {
+		var event struct {
+			RequestID json.RawMessage `json:"requestId"`
+		}
+		if json.Unmarshal(params, &event) == nil {
+			m.mu.Lock()
+			for id, pending := range m.pendingRequests {
+				if string(pending.appServerID) == string(event.RequestID) {
+					delete(m.pendingRequests, id)
+				}
+			}
+			m.rebuildLocked(time.Now().UTC())
+			m.mu.Unlock()
+		}
+	}
 }
 
 func (m *Monitor) rebuildLocked(now time.Time) {
 	merged := mergeThreads(m.appThreads, m.fsThreads)
 	merged = m.applyHooksLocked(merged, now)
+	assignThreadHierarchy(merged)
+	merged = m.decoratePendingRequestsLocked(merged)
+	assignThreadHierarchy(merged)
 	visibility := m.snapshot.Codex.Visibility
 	if visibility == "unavailable" && len(m.fsThreads) > 0 {
 		visibility = "filesystem_fallback"
@@ -415,19 +508,29 @@ func (m *Monitor) rebuildLocked(now time.Time) {
 	m.snapshot.Agent.UptimeSeconds = int64(time.Since(m.startedAt).Seconds())
 	m.snapshot.Threads = merged
 	m.snapshot.Summary = model.Summarize(merged, shared)
+	m.snapshot.PendingRequests = m.pendingRequestSnapshotLocked()
 	if m.snapshot.Codex.ConnectionState == "connected" && len(m.fsThreads) > 0 && !shared {
 		m.snapshot.Codex.Visibility = "agent_owned_with_filesystem_fallback"
 	}
 	m.snapshot.Usage = m.usage
 	m.snapshot.RateLimits = m.rateLimits
 	m.snapshot.Stale = m.isStaleLocked(now)
-	current := m.snapshot
-	for ch := range m.subs {
-		select {
-		case ch <- current:
-		default:
+	m.emitTransitionEventsLocked(merged, now)
+	m.broadcastSnapshotLocked()
+}
+
+func (m *Monitor) clearClient(client *appserver.Client) {
+	m.mu.Lock()
+	if m.client == client {
+		m.client = nil
+	}
+	for id, pending := range m.pendingRequests {
+		if pending.client == client {
+			delete(m.pendingRequests, id)
 		}
 	}
+	m.rebuildLocked(time.Now().UTC())
+	m.mu.Unlock()
 }
 
 func (m *Monitor) isStaleLocked(now time.Time) bool {
@@ -456,6 +559,18 @@ func mergeThreads(app, fs []model.Thread) []model.Thread {
 	for _, thread := range app {
 		current, exists := byID[thread.ID]
 		if exists {
+			if thread.SessionID == "" {
+				thread.SessionID = current.SessionID
+			}
+			if thread.ParentThreadID == "" {
+				thread.ParentThreadID = current.ParentThreadID
+			}
+			if thread.AgentNickname == "" {
+				thread.AgentNickname = current.AgentNickname
+			}
+			if thread.AgentRole == "" {
+				thread.AgentRole = current.AgentRole
+			}
 			if thread.Name == "" {
 				thread.Name = current.Name
 			}
