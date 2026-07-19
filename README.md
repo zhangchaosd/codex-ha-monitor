@@ -34,6 +34,16 @@ flowchart LR
     I -->|"Exact request or turn action"| A
 ```
 
+### Screenshots
+
+Home Assistant device, entity, event, and diagnostic views:
+
+![Codex Monitor device and entities in Home Assistant](docs/images/home-assistant-device.png)
+
+Codex Monitor entities arranged on a Home Assistant dashboard:
+
+![Codex Monitor Home Assistant dashboard](docs/images/home-assistant-dashboard.png)
+
 ### Control boundary
 
 The agent starts its own Codex App Server connection. A request is actionable only when that request arrived on this connection; it is then reported with `controllable: true` and a `request_id`. Existing Codex Desktop windows normally use a separate App Server process. Their session files can still be monitored, including multiple concurrent threads, but Desktop-owned approval prompts cannot be answered through the agent and are reported as non-controllable. The API rejects stale, mismatched, and non-controllable requests instead of guessing.
@@ -114,6 +124,11 @@ The integration uses SSE for live updates and a 60-second reconciliation poll by
 
 One agent installation is one HA device. Default entities include workload state, current task, active workflows, connection state, Codex/agent versions, primary rate limit, running, attention required, task problem, and a `task_activity` event entity. Worker and per-state counters, usage details, Hooks, secondary limits, and stale data are available as disabled-by-default diagnostic entities.
 
+#### HomeKit Bridge and Desktop attention limits
+
+- [HomeKit Bridge](https://www.home-assistant.io/integrations/homekit/) does not expose arbitrary Home Assistant entities. With its default filtering, Codex Monitor normally contributes only the three enabled, non-diagnostic binary sensors: **Running**, **Attention required**, and **Task problem**. Apple Home may render them as generic occupancy sensors. Text, enum, counter, version, timestamp, and standalone `task_activity` event entities have no matching HomeKit accessory type; diagnostic entities remain in Home Assistant and are excluded by default.
+- **Attention required** turns on only when the agent observes `WAITING_APPROVAL` or `WAITING_INPUT`. Codex Desktop normally owns a separate App Server, while saved session files cannot reliably identify approval/input waits. Without configured and trusted [Codex Hooks](https://developers.openai.com/codex/config-advanced#hooks), Desktop prompts may therefore remain invisible and this sensor may stay off. A completed task waiting for the next ordinary prompt is not considered attention-required. See [Enable Codex Hooks](agent/README.md#enable-codex-hooks) for the optional setup.
+
 The event entity is the preferred automation trigger. Four HA actions are registered:
 
 - `codex_monitor.approve_request`
@@ -160,6 +175,8 @@ Codex HA Monitor 把局域网内 Codex Desktop/CLI 的运行状态接入 Home As
 - 通过 Zeroconf 自动发现，也支持手动填写 URL。
 - 对可控请求执行批准、拒绝、提交输入和精确中断 turn。
 
+设备、实体、事件、诊断信息和仪表盘效果见英文部分的 [Screenshots](#screenshots)。
+
 ### 控制能力边界
 
 代理会启动自己的 Codex App Server。只有通过这条连接到达代理的请求才会标记为 `controllable: true`，并提供 `request_id`。Codex Desktop 通常使用另一个独立 App Server 进程，因此代理能通过会话文件监控 Desktop 的多个并发任务，但不能替 Desktop 回答它持有的批准弹窗。不可控、已过期或 ID 不匹配的操作会被明确拒绝，不会猜测目标。
@@ -189,6 +206,11 @@ go build -o ./bin/codex-monitor-agent ./cmd/cma
 打开“设置 → 设备与服务 → 添加集成 → Codex Monitor”。可以选择自动发现的代理，也可以填写局域网 URL 和 Token。集成使用 SSE 实时更新，默认每 60 秒轮询校准一次，可调整为 5–300 秒。
 
 每个代理安装对应一个 HA 设备。默认实体覆盖工作负载状态、当前任务、活动工作流、连接、版本、主限额、运行、需要处理、任务异常和 `task_activity` 事件；worker 数量、各状态计数、用量、Hook、次限额和陈旧状态作为默认关闭的诊断实体提供。
+
+#### HomeKit Bridge 与 Desktop 待处理状态限制
+
+- [HomeKit Bridge](https://www.home-assistant.io/integrations/homekit/) 不能映射任意 HA 实体。使用默认过滤规则时，Codex Monitor 通常只会向 Apple 家庭提供三个已启用、非诊断类的二进制感应器：**正在运行**、**需要处理**和**任务异常**；Apple 家庭可能把它们显示为普通占用感应器。文本、枚举、计数、版本、时间戳以及独立的 `task_activity` 事件没有对应的 HomeKit 配件类型；诊断实体仍保留在 HA 中，并且默认不桥接。
+- **需要处理**仅在代理观察到 `WAITING_APPROVAL` 或 `WAITING_INPUT` 时打开。Codex Desktop 通常使用独立的 App Server，而会话文件无法可靠区分等待批准或输入。没有配置并信任 [Codex Hooks](https://developers.openai.com/codex/config-advanced#hooks) 时，Desktop 提示可能对代理不可见，因而该感应器可能保持关闭。任务已经完成、只是等待下一条普通提示词，不属于“需要处理”。可选配置方法见 [启用 Codex Hooks](agent/README.md#enable-codex-hooks)。
 
 集成注册四个 Action：`approve_request`、`reject_request`、`submit_input`、`interrupt_turn`。每次操作都需要事件或当前任务属性中的精确 ID。设计细节见 [HA 架构文档](docs/ha-integration-architecture.md)，通知示例见 [自动化蓝图](blueprints/automation/codex_monitor_attention.yaml)。
 
